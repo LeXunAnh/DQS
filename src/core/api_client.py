@@ -1,4 +1,6 @@
 from ssi_fc_data import fc_md_client, model
+import pandas as pd
+from vnstock import Reference, show_api, show_doc
 
 class SSIAPIClient:
     """Giao tiếp với SSI market data API"""
@@ -33,3 +35,14 @@ class SSIAPIClient:
         """Lấy dữ liệu giá chi tiết"""
         req = model.daily_index(request_id, exchange, from_date, to_date, page, page_size, order_by, order_dir)
         return self.client.daily_index(self.config, req)
+
+class VNSTOCKAPIClient:
+    def testing(self):
+        return 0
+
+if __name__ == "__main__":
+    test = Reference()
+
+
+
+
