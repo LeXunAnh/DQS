@@ -245,15 +245,7 @@ class SignalService:
         logger.info(f"✅ Bảo trì xong: {total} tín hiệu mới | {ok} cập nhật / {skip} bỏ qua / {fail} lỗi")
         return total
 
-    def get_latest_signals(
-        self,
-        market: str = "HOSE",
-        date: Optional[str] = None,
-        direction: Optional[str] = None,
-        min_strength: float = 0.0,
-        signal_types: Optional[list[str]] = None,
-        limit: int = 100,
-    ) -> pd.DataFrame:
+    def get_latest_signals(self,market: str = "HOSE",date: Optional[str] = None,direction: Optional[str] = None,min_strength: float = 0.0,signal_types: Optional[list[str]] = None,limit: int = 100,) -> pd.DataFrame:
         """
         Query tín hiệu mới nhất — dùng cho screener hoặc dashboard.
         Args:

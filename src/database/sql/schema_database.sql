@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS securities (
     market VARCHAR(20),
     stock_name VARCHAR(255),
     stock_en_name VARCHAR(255),
-	industry_name VARCHAR(255),
+	sector_name VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -302,29 +302,16 @@ CREATE TABLE IF NOT EXISTS daily_index (
 
 CREATE INDEX idx_daily_index_date ON daily_index(trading_date);
 
-CREATE TABLE IF NOT EXISTS daily_sector_index (
-    sector_name VARCHAR(255) NOT NULL,
-    trading_date DATE NOT NULL,
-
-    open_si NUMERIC(18,4),
-    high_si NUMERIC(18,4),
-    low_si NUMERIC(18,4),
-    close_si NUMERIC(18,4),
-
-	advances INTEGER,
-	declines INTEGER,
-	no_changes INTEGER
-
-    pct_change NUMERIC(18,6),
-    total_symbols INTEGER,
-	total_vol_sector  BIGINT,
-
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    PRIMARY KEY (sector_name, trading_date)
+-- ------------------------------------------------------------
+-- 8. SECTOR TABLE 
+-- ------------------------------------------------------------
+CREATE TABLE sector_mapping (
+    symbol VARCHAR(20),
+    sector_name VARCHAR(255)
 );
 
-CREATE INDEX idx_daily_sector_index_date ON daily_sector_index(trading_date);
-CREATE INDEX idx_daily_sector_index_sector ON daily_sector_index(sector_name);
-CREATE INDEX idx_daily_sector_index_sector_date ON daily_sector_index(sector_name, trading_date);
+UPDATE securities s
+SET sector_name = sm.sector_name
+FROM sector_mapping sm
+WHERE s.symbol = sm.symbol;
 
