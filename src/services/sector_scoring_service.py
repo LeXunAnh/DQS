@@ -708,11 +708,21 @@ class SectorScoringService:
         """
         Maintenance mode — only score dates not yet in sector_score_daily.
         Run daily after SectorAggregationService.run_maintenance().
-
-        Returns: total sector-date rows written.
         """
-        last  = self._get_latest_score_date()
+        last_raw = self._get_latest_score_date()
         today = datetime.now().date()
+
+        # Chuẩn hóa kiểu dữ liệu cho last về datetime.date chuẩn
+        last = None
+        if last_raw:
+            if isinstance(last_raw, str):
+                last = datetime.strptime(last_raw.strip()[:10], "%Y-%m-%d").date()
+            elif isinstance(last_raw, datetime):
+                last = last_raw.date()
+            elif isinstance(last_raw, date_type):
+                last = last_raw
+
+        logger.info(f"🔍 DEBUG SCORING MAINTAIN: Ngày cuối cùng trong DB: {last} | Hôm nay: {today}")
 
         if last and last >= today:
             logger.info("✅ sector_score_daily đã cập nhật đến hôm nay")
