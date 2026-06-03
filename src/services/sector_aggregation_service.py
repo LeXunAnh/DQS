@@ -57,7 +57,7 @@ Quality gate
 from __future__ import annotations
 
 import logging
-from datetime import datetime, date as date_type, timedelta
+from datetime import date, datetime, date as date_type, timedelta
 from typing import Optional
 
 import numpy as np
@@ -357,20 +357,16 @@ class SectorAggregationService:
         return n
 
     def run_range(
-        self,
-        from_date: str,
-        to_date: str,
-        batch_days: int = 30,
+            self,
+            from_date: str,
+            to_date: str,
+            batch_days: int = 30,  # Vẫn giữ tham số này để không làm hỏng các chỗ khác đang gọi nó
     ) -> int:
         """
-        Aggregate all sectors for a DATE RANGE in batches.
-
-        Batching avoids loading the entire history into memory at once.
-        batch_days=30 is a good default — tune up for fast machines.
-
-        Returns: total sector-date rows written.
+        Aggregate all sectors for a DATE RANGE.
+        (ĐÃ SỬA LỖI: Chuyển sang lặp từng ngày và gọi hàm run_date đang hoạt động tốt)
         """
-        # Discover which dates have stock_mf data in the range
+        # Lấy danh sách các ngày có dữ liệu
         available = self._get_available_mf_dates(from_date, to_date)
         if not available:
             logger.warning(
@@ -381,32 +377,18 @@ class SectorAggregationService:
 
         logger.info(
             f"🚀 Aggregating {len(available)} ngày "
-            f"({from_date} → {to_date}) | batch={batch_days}d"
+            f"({from_date} → {to_date})"
         )
 
         total = 0
-        pbar  = tqdm(
-            range(0, len(available), batch_days),
-            desc="Aggregating sectors",
-            unit="batch",
-        )
+        # Dùng tqdm để hiển thị thanh tiến trình duyệt qua từng ngày
+        for d in tqdm(available, desc="Aggregating sectors", unit="day"):
+            # Ép kiểu dữ liệu ngày về đúng định dạng chuỗi YYYY-MM-DD
+            date_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
 
-        for i in pbar:
-            batch_dates = available[i : i + batch_days]
-            b_from = str(batch_dates[0])
-            b_to   = str(batch_dates[-1])
-            pbar.set_postfix({"range": f"{b_from}→{b_to}"})
-
-            stock_df = self._fetch_stock_mf(b_from, b_to)
-            if stock_df.empty:
-                continue
-
-            result = self._aggregate(stock_df)
-            if result.empty:
-                continue
-
-            self._save(result)
-            total += len(result)
+            # 🔑 CHÌA KHÓA: Gọi lại hàm run_date (hàm đã được chứng minh là chạy đúng)
+            rows_written = self.run_date(date_str)
+            total += rows_written
 
         logger.info(f"✅ Hoàn tất aggregation: {total} sector-date rows")
         return total
@@ -415,25 +397,42 @@ class SectorAggregationService:
         """
         Maintenance mode — only aggregate dates not yet in sector_factor_daily.
         Safe to run daily after MFService.run_maintenance() completes.
-
-        Returns: total sector-date rows written.
         """
-        last = self._get_latest_aggregation_date()
+        # 1. Lấy ngày cuối cùng từ DB dạng raw
+        last_raw = self._get_latest_aggregation_date()
         today = datetime.now().date()
 
+        # 2. CHUẨN HÓA: Ép kiểu dữ liệu của last về datetime.date để không bị lỗi so sánh/cộng ngày
+        last = None
+        if last_raw:
+            if isinstance(last_raw, str):
+                # Nếu DB trả về chuỗi "YYYY-MM-DD"
+                last = datetime.strptime(last_raw.strip()[:10], "%Y-%m-%d").date()
+            elif isinstance(last_raw, datetime):
+                # Nếu DB trả về dạng datetime có cả giờ giấc
+                last = last_raw.date()
+            elif isinstance(last_raw, date):
+                # Nếu đã là date chuẩn sẵn rồi
+                last = last_raw
+
+        # Thêm log này để bạn kiểm tra trên màn hình terminal
+        logger.info(f"🔍 DEBUG MAINTAIN: Ngày cuối cùng trong DB là: {last} (Kiểu: {type(last)}) | Hôm nay là: {today}")
+
+        # 3. Kiểm tra nếu đã cập nhật đến hôm nay hoặc muộn hơn
         if last and last >= today:
-            logger.info("✅ sector_factor_daily đã cập nhật đến hôm nay")
+            logger.info("✅ sector_factor_daily đã cập nhật đến hôm nay. Không cần chạy bảo trì.")
             return 0
 
+        # 4. Tính toán khoảng ngày an toàn dưới dạng chuỗi YYYY-MM-DD
         from_date = (
             (last + timedelta(days=1)).strftime("%Y-%m-%d")
             if last else "2021-01-01"
         )
         to_date = today.strftime("%Y-%m-%d")
 
-        logger.info(
-            f"🔄 Bảo trì aggregation: {from_date} → {to_date}"
-        )
+        logger.info(f"🔄 Bắt đầu tiến trình bảo trì: {from_date} → {to_date}")
+
+        # 5. Gọi hàm run_range đã hoạt động tốt của bạn
         return self.run_range(from_date, to_date)
 
     def run_all(self, from_date: str = "2021-01-01") -> int:

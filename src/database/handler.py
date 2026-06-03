@@ -111,6 +111,23 @@ class DatabaseHandler:
             logger.error(f"Lỗi khi lấy max date của {symbol}: {e}")
             return None
 
+    def get_latest_trading_date_index(self, table_name, symbol):
+        """Lấy ngày giao dịch gần nhất của 1 mã trong bảng được chỉ định (Hỗ trợ cả Stock và Index)"""
+
+        # Tự động xác định tên cột điều kiện dựa trên tên bảng
+        # Nếu bảng chứa chữ 'index', đổi tên cột lọc từ 'symbol' thành 'index_code' (hoặc 'code')
+        column_name = "index_code" if "index" in table_name.lower() else "symbol"
+
+        query = text(f"SELECT MAX(trading_date) FROM {table_name} WHERE {column_name} = :symbol")
+
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(query, {"symbol": symbol}).scalar()
+                return result  # Trả về đối tượng date hoặc None
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy max date của {symbol} trong bảng {table_name}: {e}")
+            return None
+
     def optimize_db(self):
         # Dùng AUTOCOMMIT để ANALYZE chạy ngoài transaction block
         with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
@@ -239,6 +256,170 @@ class DatabaseHandler:
             return df
         except Exception as e:
             logging.error(f"Lỗi lấy indicators cho {symbol}: {e}")
+            return pd.DataFrame()
+
+
+# ── Sector Rotation fetch methods ────────────────────────────────────────
+    @staticmethod
+    def fetch_sector_score_history(db,from_date: str,to_date: str,sectors: list[str],) -> pd.DataFrame:
+        """
+        Fetch sector_score_daily time-series for selected sectors.
+        Used by the score trend chart in the Sector Rotation dashboard.
+        """
+        q = text("""
+            SELECT date, sector_name, total_score, inst_score,
+                   breadth_score, regime, score_delta_1d, score_delta_5d
+            FROM sector_score_daily
+            WHERE date BETWEEN :f AND :t
+              AND sector_name = ANY(:secs)
+            ORDER BY date ASC, sector_name
+        """)
+        try:
+            with db.engine.connect() as conn:
+                df = pd.read_sql(q, conn,
+                                 params={"f": from_date, "t": to_date,
+                                         "secs": list(sectors)})
+            df["date"] = pd.to_datetime(df["date"])
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch sector score history: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def fetch_sector_heatmap(db,from_date: str,to_date: str,) -> pd.DataFrame:
+        """
+        Fetch (date, sector_name, total_score, regime) for the regime heatmap.
+        Returns all sectors in the date range — caller slices to last N days.
+        """
+        q = text("""
+            SELECT date, sector_name, total_score, regime
+            FROM sector_score_daily
+            WHERE date BETWEEN :f AND :t
+            ORDER BY date ASC, sector_name
+        """)
+        try:
+            with db.engine.connect() as conn:
+                df = pd.read_sql(q, conn, params={"f": from_date, "t": to_date})
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch sector heatmap: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def fetch_sector_detail(db,sector: str,from_date: str,to_date: str,) -> pd.DataFrame:
+        """
+        Fetch sector_factor_daily + sector_score_daily for one sector.
+        Used by the drill-down indicator time-series charts.
+        """
+        q = text("""
+            SELECT
+                sfd.date,
+                sfd.weighted_mfi,  sfd.median_mfi,
+                sfd.weighted_cmf,  sfd.median_cmf,
+                sfd.weighted_rvol,
+                sfd.weighted_nmf_z, sfd.weighted_nff_z,
+                sfd.weighted_accel,
+                sfd.breadth_cmf_positive, sfd.breadth_mfi_above_50,
+                sfd.breadth_accel_above_1, sfd.breadth_nff_positive,
+                sfd.n_stocks, sfd.coverage_pct,
+                ssd.total_score, ssd.regime
+            FROM sector_factor_daily sfd
+            LEFT JOIN sector_score_daily ssd
+              ON ssd.date = sfd.date AND ssd.sector_name = sfd.sector_name
+            WHERE sfd.sector_name = :sec
+              AND sfd.date BETWEEN :f AND :t
+            ORDER BY sfd.date ASC
+        """)
+        try:
+            with db.engine.connect() as conn:
+                df = pd.read_sql(q, conn,
+                                 params={"sec": sector,
+                                         "f": from_date, "t": to_date})
+            df["date"] = pd.to_datetime(df["date"])
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch sector detail {sector}: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def fetch_symbol_matrix(db,sector: str,date_str: str,) -> pd.DataFrame:
+        """
+        Fetch all symbols in a sector for ONE date with MF indicators
+        and latest-day price change.
+
+        Joins:
+            stock_mf_daily  → MF indicators + trading_value
+            securities      → stock_name
+            daily_stock_prices → close_price, per_price_change
+
+        Sorted by trading_value DESC (most liquid first).
+        """
+        q = text("""
+            SELECT
+                s.symbol,
+                s.stock_name,
+                dsp.close_price,
+                dsp.per_price_change,
+                smd.mfi,
+                smd.cmf,
+                smd.rvol,
+                smd.nmf_zscore,
+                smd.nmf_accel,
+                smd.nff_zscore,
+                smd.trading_value
+            FROM stock_mf_daily smd
+            JOIN securities s ON s.symbol = smd.symbol
+            LEFT JOIN daily_stock_prices dsp
+                   ON dsp.symbol      = smd.symbol
+                  AND dsp.trading_date = smd.date
+            WHERE smd.sector_name = :sector
+              AND smd.date = :date
+            ORDER BY smd.trading_value DESC NULLS LAST
+        """)
+        try:
+            with db.engine.connect() as conn:
+                df = pd.read_sql(q, conn,
+                                 params={"sector": sector, "date": date_str})
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch symbol matrix {sector} @ {date_str}: {e}")
+            return pd.DataFrame()
+
+    @staticmethod
+    def fetch_symbol_history(db,sector: str,from_date: str,to_date: str,) -> pd.DataFrame:
+        """
+        Fetch stock_mf_daily time-series for ALL symbols in a sector.
+        Used for the multi-date symbol matrix (rows=symbol, cols=date).
+        Sorted by date ASC, then trading_value DESC within each date.
+        """
+        q = text("""
+            SELECT
+                smd.date,
+                smd.symbol,
+                s.stock_name,
+                smd.mfi,
+                smd.cmf,
+                smd.rvol,
+                smd.nmf_zscore,
+                smd.nmf_accel,
+                smd.nff_zscore,
+                smd.trading_value
+            FROM stock_mf_daily smd
+            JOIN securities s ON s.symbol = smd.symbol
+            WHERE smd.sector_name = :sector
+              AND smd.date BETWEEN :f AND :t
+            ORDER BY smd.date ASC, smd.trading_value DESC NULLS LAST
+        """)
+        try:
+            with db.engine.connect() as conn:
+                df = pd.read_sql(q, conn,
+                                 params={"sector": sector,
+                                         "f": from_date, "t": to_date})
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch symbol history {sector}: {e}")
             return pd.DataFrame()
 
 if __name__ == "__main__":

@@ -325,7 +325,7 @@ class SyncService:
             logger.error(f"Exception trong _execute_fetch_daily_index ({index_code}): {e}")
             return False
 
-    def sync_all_daily_index(self, market: str = 'HOSE', from_date: str = '01/01/2015', maintenance_mode: bool = False):
+    def sync_all_daily_index(self, market: str = 'HOSE', from_date: str = '01/01/2021', maintenance_mode: bool = False):
         """
         Đồng bộ dữ liệu lịch sử (Daily Index) cho toàn bộ chỉ số của một sàn.
         :param market: Tên sàn ('HOSE', 'HNX', 'UPCOM') tương ứng cột `exchange` trong DB
@@ -358,7 +358,7 @@ class SyncService:
                 # Tính toán ngày bắt đầu dựa theo chế độ chạy
                 if maintenance_mode:
                     # Lấy ngày lớn nhất hiện tại của index_code này trong bảng daily_index
-                    last_date = self.db.get_latest_trading_date('daily_index', index_code)
+                    last_date = self.db.get_latest_trading_date_index('daily_index', index_code)
                     start_date = (last_date + timedelta(days=1)) if last_date \
                         else datetime.strptime(from_date, '%d/%m/%Y').date()
                 else:

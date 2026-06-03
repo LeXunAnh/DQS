@@ -30,3 +30,4 @@ Thumbs.db
 #Others
 docs
 test_api_ssi
+src/database/sql/

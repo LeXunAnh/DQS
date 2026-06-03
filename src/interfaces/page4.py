@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sqlalchemy import text
+from src.database.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -115,145 +115,30 @@ def _load_daily_ranking(scoring_svc, date_str, min_stocks: int) -> pd.DataFrame:
         date=date_str, min_coverage=0.0, min_stocks=min_stocks,
     )
 
-
 @st.cache_data(ttl=300)
 def _load_score_history(_db, from_date: str, to_date: str,
                         sectors: tuple[str, ...]) -> pd.DataFrame:
-    q = text("""
-        SELECT date, sector_name, total_score, inst_score,
-               breadth_score, regime, score_delta_1d, score_delta_5d
-        FROM sector_score_daily
-        WHERE date BETWEEN :f AND :t
-          AND sector_name = ANY(:secs)
-        ORDER BY date ASC, sector_name
-    """)
-    try:
-        with _db.engine.connect() as conn:
-            df = pd.read_sql(q, conn, params={"f": from_date, "t": to_date,
-                                               "secs": list(sectors)})
-        df["date"] = pd.to_datetime(df["date"])
-        return df
-    except Exception as e:
-        logger.error(f"Lỗi load score history: {e}")
-        return pd.DataFrame()
-
+    return DatabaseHandler.fetch_sector_score_history(
+        _db, from_date, to_date, list(sectors)
+    )
 
 @st.cache_data(ttl=300)
 def _load_heatmap_data(_db, from_date: str, to_date: str) -> pd.DataFrame:
-    q = text("""
-        SELECT date, sector_name, total_score, regime
-        FROM sector_score_daily
-        WHERE date BETWEEN :f AND :t
-        ORDER BY date ASC, sector_name
-    """)
-    try:
-        with _db.engine.connect() as conn:
-            df = pd.read_sql(q, conn, params={"f": from_date, "t": to_date})
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        return df
-    except Exception as e:
-        logger.error(f"Lỗi load heatmap: {e}")
-        return pd.DataFrame()
-
+    return DatabaseHandler.fetch_sector_heatmap(_db, from_date, to_date)
 
 @st.cache_data(ttl=300)
-def _load_sector_detail(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
-    q = text("""
-        SELECT
-            sfd.date,
-            sfd.weighted_mfi, sfd.median_mfi,
-            sfd.weighted_cmf, sfd.median_cmf,
-            sfd.weighted_rvol,
-            sfd.weighted_nmf_z, sfd.weighted_nff_z,
-            sfd.weighted_accel,
-            sfd.breadth_cmf_positive, sfd.breadth_mfi_above_50,
-            sfd.breadth_accel_above_1, sfd.breadth_nff_positive,
-            sfd.n_stocks, sfd.coverage_pct,
-            ssd.total_score, ssd.regime
-        FROM sector_factor_daily sfd
-        LEFT JOIN sector_score_daily ssd
-          ON ssd.date = sfd.date AND ssd.sector_name = sfd.sector_name
-        WHERE sfd.sector_name = :sec
-          AND sfd.date BETWEEN :f AND :t
-        ORDER BY sfd.date ASC
-    """)
-    try:
-        with _db.engine.connect() as conn:
-            df = pd.read_sql(q, conn, params={"sec": sector, "f": from_date, "t": to_date})
-        df["date"] = pd.to_datetime(df["date"])
-        return df
-    except Exception as e:
-        logger.error(f"Lỗi load sector detail: {e}")
-        return pd.DataFrame()
-
+def _load_sector_detail(_db, sector: str,
+                        from_date: str, to_date: str) -> pd.DataFrame:
+    return DatabaseHandler.fetch_sector_detail(_db, sector, from_date, to_date)
 
 @st.cache_data(ttl=300)
 def _load_symbol_matrix(_db, sector: str, date_str: str) -> pd.DataFrame:
-    """
-    Fetch all symbols in a sector for a specific date from stock_mf_daily,
-    joined with securities for stock_name.
-    Sorted by trading_value DESC (largest cap first).
-    """
-    q = text("""
-        SELECT
-            s.symbol,
-            s.stock_name,
-            smd.mfi,
-            smd.cmf,
-            smd.rvol,
-            smd.nmf_zscore,
-            smd.nmf_accel,
-            smd.nff_zscore,
-            smd.trading_value
-        FROM stock_mf_daily smd
-        JOIN securities s ON s.symbol = smd.symbol
-        WHERE smd.sector_name = :sector
-          AND smd.date = :date
-        ORDER BY smd.trading_value DESC NULLS LAST
-    """)
-    try:
-        with _db.engine.connect() as conn:
-            df = pd.read_sql(q, conn, params={"sector": sector, "date": date_str})
-        return df
-    except Exception as e:
-        logger.error(f"Lỗi load symbol matrix: {e}")
-        return pd.DataFrame()
-
+    return DatabaseHandler.fetch_symbol_matrix(_db, sector, date_str)
 
 @st.cache_data(ttl=300)
-def _load_symbol_history(_db, sector: str, from_date: str,
-                         to_date: str) -> pd.DataFrame:
-    """
-    Fetch stock_mf_daily time-series for all symbols in a sector.
-    Used for multi-date symbol matrix (rows=symbol, cols=date).
-    """
-    q = text("""
-        SELECT
-            smd.date,
-            smd.symbol,
-            s.stock_name,
-            smd.mfi,
-            smd.cmf,
-            smd.rvol,
-            smd.nmf_zscore,
-            smd.nmf_accel,
-            smd.nff_zscore,
-            smd.trading_value
-        FROM stock_mf_daily smd
-        JOIN securities s ON s.symbol = smd.symbol
-        WHERE smd.sector_name = :sector
-          AND smd.date BETWEEN :f AND :t
-        ORDER BY smd.date ASC, smd.trading_value DESC NULLS LAST
-    """)
-    try:
-        with _db.engine.connect() as conn:
-            df = pd.read_sql(q, conn, params={"sector": sector,
-                                               "f": from_date, "t": to_date})
-        df["date"] = pd.to_datetime(df["date"]).dt.date
-        return df
-    except Exception as e:
-        logger.error(f"Lỗi load symbol history: {e}")
-        return pd.DataFrame()
+def _load_symbol_history(_db, sector: str,
+                         from_date: str, to_date: str) -> pd.DataFrame:
+    return DatabaseHandler.fetch_symbol_history(_db, sector, from_date, to_date)
 
 
 # ── Sub-renderers ──────────────────────────────────────────────────────────────
@@ -357,12 +242,36 @@ def _render_weekly_table(scoring_svc, year_week) -> None:
             styled = styled.map(fn, subset=[col])
     st.dataframe(styled, use_container_width=True, height=380)
 
+def _pct_change_style(val: float) -> str:
+    """Color for per_price_change column: green=up, red=down, neutral=flat."""
+    if pd.isna(val):
+        return "background-color:#f3f4f6;color:#9ca3af"
+    if val > 0:
+        ratio = min(val / 7.0, 1.0)          # 7% = ceiling price → full green
+        r = int(22  + ratio * (22  - 22))
+        g = int(163 + ratio * (239 - 163))
+        b = int(74  + ratio * (172 - 74))
+        luma = 0.299*r + 0.587*g + 0.114*b
+        fg   = "#14532d" if luma > 160 else "#fff"
+        return f"background-color:rgb({r},{g},{b});color:{fg};font-weight:600"
+    if val < 0:
+        ratio = min(abs(val) / 7.0, 1.0)     # -7% = floor price → full red
+        r = int(252 + ratio * (220 - 252))
+        g = int(165 + ratio * (38  - 165))
+        b = int(165 + ratio * (38  - 165))
+        luma = 0.299*r + 0.587*g + 0.114*b
+        fg   = "#7f1d1d" if luma > 160 else "#fff"
+        return f"background-color:rgb({r},{g},{b});color:{fg};font-weight:600"
+    return "background-color:#f3f4f6;color:#374151"
+
 
 def _render_symbol_matrix_single(db, sector: str, date_str: str) -> None:
     """
     Symbol matrix for ONE date.
     Rows = symbols (sorted by trading value DESC).
-    Columns = stock_name | MFI | CMF | RVOL | NMF_z | Accel | NFF_z | GT(tỷ)
+    Columns = Mã | Tên | %D | Giá | MFI | CMF | RVOL | NMF_z | Accel | NFF_z | GT(tỷ)
+    %D  = per_price_change (% vs previous close) — color-coded green/red.
+    Giá = adjusted close price of the day.
     Each indicator column is independently color-coded using _cell_style().
     """
     df = _load_symbol_matrix(db, sector, date_str)
@@ -371,58 +280,68 @@ def _render_symbol_matrix_single(db, sector: str, date_str: str) -> None:
         return
 
     disp = df.rename(columns={
-        "symbol":       "Mã",
-        "stock_name":   "Tên",
-        "mfi":          "MFI",
-        "cmf":          "CMF",
-        "rvol":         "RVOL",
-        "nmf_zscore":   "NMF_z",
-        "nmf_accel":    "Accel",
-        "nff_zscore":   "NFF_z",
-        "trading_value":"GT (tỷ)",
+        "symbol": "Mã",
+        "stock_name": "Tên",
+        "per_price_change":"% Today",
+        "mfi": "MFI",
+        "cmf": "CMF",
+        "rvol": "RVOL",
+        "nmf_zscore": "NMF_z",
+        "nmf_accel": "Accel",
+        "nff_zscore": "NFF_z",
+        "trading_value": "GT (tỷ)",
     }).copy()
 
     # Convert trading value to billions
     if "GT (tỷ)" in disp.columns:
         disp["GT (tỷ)"] = (disp["GT (tỷ)"] / 1e9).round(2)
 
-    disp = disp.reset_index(drop=True)
+    # Column order: price info first, then indicators, then value
+    col_order = [c for c in [
+        "Mã", "Tên", "% Today",
+        "MFI", "CMF", "RVOL", "NMF_z", "Accel", "NFF_z",
+        "GT (tỷ)",
+    ] if c in disp.columns]
+    disp = disp[col_order].reset_index(drop=True)
 
     fmt = {
-        "MFI":    "{:.1f}",
-        "CMF":    "{:+.3f}",
-        "RVOL":   "{:.2f}",
-        "NMF_z":  "{:+.3f}",
-        "Accel":  "{:+.3f}",
-        "NFF_z":  "{:+.3f}",
-        "GT (tỷ)":"{:.1f}",
+        "% Today": "{:+.2f}%",
+        "MFI": "{:.1f}",
+        "CMF": "{:+.3f}",
+        "RVOL": "{:.2f}",
+        "NMF_z": "{:+.3f}",
+        "Accel": "{:+.3f}",
+        "NFF_z": "{:+.3f}",
+        "GT (tỷ)": "{:.1f}",
     }
     fmt = {k: v for k, v in fmt.items() if k in disp.columns}
 
     styled = disp.style.format(fmt, na_rep="—")
 
-    # Apply per-column color rules
-    ind_cols = ["CMF","MFI","RVOL","NMF_z","Accel","NFF_z"]
-    for col in ind_cols:
+    # % ngày: green/red intensity scaled to ±7% (ceiling/floor)
+    if "% Today" in disp.columns:
+        styled = styled.map(_pct_change_style, subset=["% Today"])
+
+    # Indicator columns: per-column threshold coloring
+    for col in ["CMF", "MFI", "RVOL", "NMF_z", "Accel", "NFF_z"]:
         if col in disp.columns:
             styled = styled.map(_cell_style(col), subset=[col])
 
-    # GT column: gradient (higher = more opaque blue, just background_gradient)
+    # GT column: blue gradient (higher = darker)
     if "GT (tỷ)" in disp.columns:
         styled = styled.background_gradient(
             subset=["GT (tỷ)"], cmap="Blues", low=0.2, high=0.8
         )
 
     n = len(disp)
-    height = min(40 * n + 40, 800)   # dynamic height, cap at 800px
+    height = min(40 * n + 40, 800)
     st.dataframe(styled, use_container_width=True, height=height)
 
     st.caption(
-        f"**{n} cổ phiếu** | "
-        "🟢 Tín hiệu mạnh dương &nbsp;|&nbsp; "
-        "🔴 Tín hiệu mạnh âm &nbsp;|&nbsp; "
-        "⬜ Trung tính &nbsp;|&nbsp; "
-        "GT sắp xếp theo giá trị giao dịch"
+        f"**{n} cổ phiếu** &nbsp;|&nbsp; "
+        "**% ngày**: tăng/giảm so với phiên trước (±7% = trần/sàn) &nbsp;|&nbsp; "
+        "🟢 Tín hiệu dương &nbsp; 🔴 Tín hiệu âm &nbsp; ⬜ Trung tính &nbsp;|&nbsp; "
+        "Sắp xếp theo giá trị giao dịch"
     )
 
 

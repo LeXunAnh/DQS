@@ -126,7 +126,7 @@ class MFService:
         if from_date:
             warmup = (
                 datetime.strptime(from_date, "%Y-%m-%d")
-                - timedelta(days=self.MIN_HISTORY_DAYS + 10)
+                - timedelta(days=self.MIN_HISTORY_DAYS + 40)
             ).strftime("%Y-%m-%d")
             date_clause = "AND trading_date >= :warmup"
             params["warmup"] = warmup
@@ -302,9 +302,7 @@ class MFService:
     ) -> int:
         """
         Compute and save MF indicators for ALL symbols on a market.
-
         Fetches sector mapping once (bulk query) to avoid N+1 lookups.
-
         Returns:
             Total number of symbols processed successfully.
         """
@@ -331,7 +329,7 @@ class MFService:
                     continue
 
                 sector = sector_map.get(sym)
-                result = self._compute(sym, raw, sector, from_date)
+                result = self._compute(sym, raw, sector, from_date=from_date)
 
                 if result.empty:
                     fail += 1

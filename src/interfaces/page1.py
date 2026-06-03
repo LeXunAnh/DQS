@@ -35,7 +35,13 @@ def render(db, sync_service, gap_service, indicator_svc, signal_svc, mf_svc=None
             key="sys_sync_func",
         )
     with col2:
-        t1_market = st.selectbox("Sàn", ["HOSE", "HNX", "UPCOM"], key="sys_market")
+        # Nếu là tác vụ bảo trì, cho phép chọn thêm option HOSE + HNX
+        if func == "Bảo trì (cập nhật thiếu)":
+            market_options = ["HOSE", "HNX", "HOSE + HNX", "UPCOM"]
+        else:
+            market_options = ["HOSE", "HNX", "UPCOM"]
+
+        t1_market = st.selectbox("Sàn", market_options, key="sys_market")
 
     # Dynamic inputs
     t1_from = datetime(2021, 1, 1).date()
@@ -83,7 +89,13 @@ def render(db, sync_service, gap_service, indicator_svc, signal_svc, mf_svc=None
                 elif func == "Đồng bộ tất cả mã giá chi tiết":
                     sync_service.sync_all_stock_prices(t1_market, f)
                 elif func == "Bảo trì (cập nhật thiếu)":
-                    sync_service.maintenance_sync(t1_market, t1_mode)
+                    if t1_market == "HOSE + HNX":
+                        st.write("⏳ Đang bảo trì sàn HOSE...")
+                        sync_service.maintenance_sync("HOSE", t1_mode)
+                        st.write("⏳ Đang bảo trì sàn HNX...")
+                        sync_service.maintenance_sync("HNX", t1_mode)
+                    else:
+                        sync_service.maintenance_sync(t1_market, t1_mode)
                 elif func == "Vá lỗ hổng dữ liệu":
                     gap_service.repair_all_gaps(t1_market)
 
@@ -247,133 +259,133 @@ def render(db, sync_service, gap_service, indicator_svc, signal_svc, mf_svc=None
                     st.session_state.log_messages.append(f"❌ Quá trình đồng bộ xảy ra lỗi: {str(e)}")
 
         # ── PHẦN 3: SECTOR ROTATION PIPELINE ─────────────────────────────────────
-        st.subheader("3. Sector Rotation Pipeline")
+    st.subheader("3. Sector Rotation Pipeline")
 
-        if mf_svc is None or agg_svc is None or scoring_svc is None:
-            st.info("Sector Rotation services chưa được khởi tạo.")
-        else:
-            sr_col1, sr_col2, sr_col3 = st.columns(3)
+    if mf_svc is None or agg_svc is None or scoring_svc is None:
+        st.info("Sector Rotation services chưa được khởi tạo.")
+    else:
+        sr_col1, sr_col2, sr_col3 = st.columns(3)
 
-            # ── MF Indicators ─────────────────────────────────────────────────────
-            with sr_col1:
-                st.markdown("#### 💹 MF Indicators")
-                mf_mode = st.radio(
-                    "Chế độ MF",
-                    ["Bảo trì (thiếu)", "1 mã", "Toàn sàn"],
-                    horizontal=True, key="mf_m",
-                )
-                mf_mkt = st.selectbox("Sàn", ["HOSE", "HNX", "UPCOM"], key="mf_mkt")
-                mf_sym = (
-                    st.text_input("Mã", value="SSI", key="mf_s")
-                    if mf_mode == "1 mã" else ""
-                )
-                mf_date = (
-                    st.date_input("Từ ngày (trống=all)", value=None, key="mf_d")
-                    if mf_mode != "Bảo trì (thiếu)" else None
-                )
+        # ── MF Indicators ─────────────────────────────────────────────────────
+        with sr_col1:
+            st.markdown("#### 💹 MF Indicators")
+            mf_mode = st.radio(
+                "Chế độ MF",
+                ["Bảo trì (thiếu)", "1 mã", "Toàn sàn"],
+                horizontal=True, key="mf_m",
+            )
+            mf_mkt = st.selectbox("Sàn", ["HOSE", "HNX"], key="mf_mkt")
+            mf_sym = (
+                st.text_input("Mã", value="SSI", key="mf_s")
+                if mf_mode == "1 mã" else ""
+            )
+            mf_date = (
+                st.date_input("Từ ngày (trống=all)", value=None, key="mf_d")
+                if mf_mode != "Bảo trì (thiếu)" else None
+            )
 
-                if st.button("▶️ Chạy MF", use_container_width=True, key="btn_mf"):
-                    with st.status("Đang tính MF indicators...") as s:
-                        fd = mf_date.strftime("%Y-%m-%d") if mf_date else None
-                        if mf_mode == "Bảo trì (thiếu)":
-                            mf_svc.run_maintenance(mf_mkt)
-                        elif mf_mode == "1 mã":
-                            mf_svc.run_one(mf_sym.upper(), fd)
-                        else:
-                            mf_svc.run_all(mf_mkt, fd)
-                        s.update(label="✅ Xong", state="complete")
+            if st.button("▶️ Chạy MF", use_container_width=True, key="btn_mf"):
+                with st.status("Đang tính MF indicators...") as s:
+                    fd = mf_date.strftime("%Y-%m-%d") if mf_date else None
+                    if mf_mode == "Bảo trì (thiếu)":
+                        mf_svc.run_maintenance(mf_mkt)
+                    elif mf_mode == "1 mã":
+                        mf_svc.run_one(mf_sym.upper(), fd)
+                    else:
+                        mf_svc.run_all(mf_mkt, fd)
+                    s.update(label="✅ Xong", state="complete")
 
-            # ── Sector Aggregation ────────────────────────────────────────────────
-            with sr_col2:
-                st.markdown("#### 🏭 Sector Aggregation")
-                agg_mode = st.radio(
-                    "Chế độ Aggregation",
-                    ["Bảo trì (thiếu)", "1 ngày", "Khoảng ngày", "Full rebuild"],
-                    horizontal=False, key="agg_m",
-                )
-                agg_date = agg_from = agg_to = None
-                if agg_mode == "1 ngày":
-                    agg_date = st.date_input("Ngày", key="agg_date")
-                elif agg_mode == "Khoảng ngày":
-                    agg_from = st.date_input("Từ ngày", value=datetime(2024, 1, 1), key="agg_from")
-                    agg_to = st.date_input("Đến ngày", key="agg_to")
-                elif agg_mode == "Full rebuild":
-                    agg_from = st.date_input("Từ ngày", value=datetime(2021, 1, 1), key="agg_rebuild_from")
+        # ── Sector Aggregation ────────────────────────────────────────────────
+        with sr_col2:
+            st.markdown("#### 🏭 Sector Aggregation")
+            agg_mode = st.radio(
+                "Chế độ Aggregation",
+                ["Bảo trì (thiếu)", "1 ngày", "Khoảng ngày", "Full rebuild"],
+                horizontal=False, key="agg_m",
+            )
+            agg_date = agg_from = agg_to = None
+            if agg_mode == "1 ngày":
+                agg_date = st.date_input("Ngày", key="agg_date")
+            elif agg_mode == "Khoảng ngày":
+                agg_from = st.date_input("Từ ngày", value=datetime(2024, 1, 1), key="agg_from")
+                agg_to = st.date_input("Đến ngày", key="agg_to")
+            elif agg_mode == "Full rebuild":
+                agg_from = st.date_input("Từ ngày", value=datetime(2021, 1, 1), key="agg_rebuild_from")
 
-                if st.button("▶️ Chạy Aggregation", use_container_width=True, key="btn_agg"):
-                    with st.status("Đang aggregate...") as s:
-                        if agg_mode == "Bảo trì (thiếu)":
-                            n = agg_svc.run_maintenance()
-                        elif agg_mode == "1 ngày":
-                            n = agg_svc.run_date(agg_date.strftime("%Y-%m-%d"))
-                        elif agg_mode == "Khoảng ngày":
-                            n = agg_svc.run_range(
-                                agg_from.strftime("%Y-%m-%d"),
-                                agg_to.strftime("%Y-%m-%d"),
-                            )
-                        else:
-                            n = agg_svc.run_all(agg_from.strftime("%Y-%m-%d"))
-                        s.update(label=f"✅ Xong — {n} sector-date rows", state="complete")
-
-            # ── Sector Scoring ────────────────────────────────────────────────────
-            with sr_col3:
-                st.markdown("#### 🏆 Sector Scoring")
-                sc_mode = st.radio(
-                    "Chế độ Scoring",
-                    ["Bảo trì (thiếu)", "1 ngày", "Khoảng ngày", "Full rebuild"],
-                    horizontal=False, key="sc_m",
-                )
-                sc_date = sc_from = sc_to = None
-                if sc_mode == "1 ngày":
-                    sc_date = st.date_input("Ngày", key="sc_date")
-                elif sc_mode == "Khoảng ngày":
-                    sc_from = st.date_input("Từ ngày", value=datetime(2024, 1, 1), key="sc_from")
-                    sc_to = st.date_input("Đến ngày", key="sc_to")
-                elif sc_mode == "Full rebuild":
-                    sc_from = st.date_input("Từ ngày", value=datetime(2021, 1, 1), key="sc_rebuild_from")
-
-                if st.button("▶️ Chạy Scoring", use_container_width=True, key="btn_sc"):
-                    with st.status("Đang scoring...") as s:
-                        if sc_mode == "Bảo trì (thiếu)":
-                            n = scoring_svc.run_maintenance()
-                        elif sc_mode == "1 ngày":
-                            n = scoring_svc.run_date(sc_date.strftime("%Y-%m-%d"))
-                        elif sc_mode == "Khoảng ngày":
-                            n = scoring_svc.run_range(
-                                sc_from.strftime("%Y-%m-%d"),
-                                sc_to.strftime("%Y-%m-%d"),
-                            )
-                        else:
-                            n = scoring_svc.run_all(sc_from.strftime("%Y-%m-%d"))
-                        s.update(label=f"✅ Xong — {n} sector rows", state="complete")
-
-            # ── One-click full pipeline ───────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("##### ⚡ Chạy toàn bộ pipeline (Bảo trì)")
-            st.caption("MF Indicators → Aggregation → Scoring (chỉ ngày còn thiếu)")
-
-            p_mkt = st.selectbox("Sàn pipeline", ["HOSE", "HNX", "UPCOM"], key="pipe_mkt")
-            if st.button("🚀 Chạy Full Pipeline", type="primary",
-                         use_container_width=True, key="btn_pipeline"):
-                st.session_state.log_messages = []
-                with st.status("Đang chạy full pipeline...", expanded=True) as status:
-                    try:
-                        st.write("📊 Bước 1/3: MF Indicators...")
-                        mf_svc.run_maintenance(p_mkt)
-                        st.write("🏭 Bước 2/3: Sector Aggregation...")
-                        agg_svc.run_maintenance()
-                        st.write("🏆 Bước 3/3: Sector Scoring...")
-                        scoring_svc.run_maintenance()
-                        status.update(
-                            label="✅ Full pipeline hoàn tất!",
-                            state="complete", expanded=False,
+            if st.button("▶️ Chạy Aggregation", use_container_width=True, key="btn_agg"):
+                with st.status("Đang aggregate...") as s:
+                    if agg_mode == "Bảo trì (thiếu)":
+                        n = agg_svc.run_maintenance()
+                    elif agg_mode == "1 ngày":
+                        n = agg_svc.run_date(agg_date.strftime("%Y-%m-%d"))
+                    elif agg_mode == "Khoảng ngày":
+                        n = agg_svc.run_range(
+                            agg_from.strftime("%Y-%m-%d"),
+                            agg_to.strftime("%Y-%m-%d"),
                         )
-                        st.cache_data.clear()
-                    except Exception as e:
-                        logging.exception(e)
-                        status.update(label=f"❌ Lỗi: {e}", state="error")
+                    else:
+                        n = agg_svc.run_all(agg_from.strftime("%Y-%m-%d"))
+                    s.update(label=f"✅ Xong — {n} sector-date rows", state="complete")
 
+        # ── Sector Scoring ────────────────────────────────────────────────────
+        with sr_col3:
+            st.markdown("#### 🏆 Sector Scoring")
+            sc_mode = st.radio(
+                "Chế độ Scoring",
+                ["Bảo trì (thiếu)", "1 ngày", "Khoảng ngày", "Full rebuild"],
+                horizontal=False, key="sc_m",
+            )
+            sc_date = sc_from = sc_to = None
+            if sc_mode == "1 ngày":
+                sc_date = st.date_input("Ngày", key="sc_date")
+            elif sc_mode == "Khoảng ngày":
+                sc_from = st.date_input("Từ ngày", value=datetime(2024, 1, 1), key="sc_from")
+                sc_to = st.date_input("Đến ngày", key="sc_to")
+            elif sc_mode == "Full rebuild":
+                sc_from = st.date_input("Từ ngày", value=datetime(2021, 1, 1), key="sc_rebuild_from")
+
+            if st.button("▶️ Chạy Scoring", use_container_width=True, key="btn_sc"):
+                with st.status("Đang scoring...") as s:
+                    if sc_mode == "Bảo trì (thiếu)":
+                        n = scoring_svc.run_maintenance()
+                    elif sc_mode == "1 ngày":
+                        n = scoring_svc.run_date(sc_date.strftime("%Y-%m-%d"))
+                    elif sc_mode == "Khoảng ngày":
+                        n = scoring_svc.run_range(
+                            sc_from.strftime("%Y-%m-%d"),
+                            sc_to.strftime("%Y-%m-%d"),
+                        )
+                    else:
+                        n = scoring_svc.run_all(sc_from.strftime("%Y-%m-%d"))
+                    s.update(label=f"✅ Xong — {n} sector rows", state="complete")
+
+        # ── One-click full pipeline ───────────────────────────────────────────
         st.markdown("---")
+        st.markdown("##### ⚡ Chạy toàn bộ pipeline (Bảo trì)")
+        st.caption("MF Indicators → Aggregation → Scoring (chỉ ngày còn thiếu)")
+
+        p_mkt = st.selectbox("Sàn pipeline", ["HOSE", "HNX", "UPCOM"], key="pipe_mkt")
+        if st.button("🚀 Chạy Full Pipeline", type="primary",
+                     use_container_width=True, key="btn_pipeline"):
+            st.session_state.log_messages = []
+            with st.status("Đang chạy full pipeline...", expanded=True) as status:
+                try:
+                    st.write("📊 Bước 1/3: MF Indicators...")
+                    mf_svc.run_maintenance(p_mkt)
+                    st.write("🏭 Bước 2/3: Sector Aggregation...")
+                    agg_svc.run_maintenance()
+                    st.write("🏆 Bước 3/3: Sector Scoring...")
+                    scoring_svc.run_maintenance()
+                    status.update(
+                        label="✅ Full pipeline hoàn tất!",
+                        state="complete", expanded=False,
+                    )
+                    st.cache_data.clear()
+                except Exception as e:
+                    logging.exception(e)
+                    status.update(label=f"❌ Lỗi: {e}", state="error")
+
+    st.markdown("---")
 
 
     with st.expander("Logs hệ thống"):
