@@ -33,10 +33,10 @@ Giao diện **Streamlit** giúp trực quan hóa biểu đồ kỹ thuật, lọ
 - [x] Streamlit Dashboard
 
 ### Phase 2 — Money Flow Analytics
-- [ ] Theo dõi dòng tiền thị trường
+- [x] Theo dõi dòng tiền thị trường
 - [ ] Phân tích khối ngoại
-- [ ] Sector Rotation
-- [ ] Market Breadth Indicators
+- [x] Sector Rotation
+- [x] Market Breadth Indicators
 
 ### Phase 3 — Backtesting Framework
 - [ ] Backtest chiến lược giao dịch
