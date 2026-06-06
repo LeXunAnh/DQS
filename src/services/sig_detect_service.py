@@ -26,8 +26,7 @@ class SignalDetector:
 
     # ── MA Crossover ────────────────────────────────────────────
     @classmethod
-    def detect_ma_cross(cls, df: pd.DataFrame, symbol: str,
-                        fast_col: str = "ma5", slow_col: str = "ma20") -> list[dict]:
+    def detect_ma_cross(cls, df: pd.DataFrame, symbol: str, fast_col: str = "ma5", slow_col: str = "ma20") -> list[dict]:
         signals = []
         prev_fast = df[fast_col].shift(1)
         prev_slow = df[slow_col].shift(1)
@@ -242,8 +241,7 @@ class SignalDetector:
 
     # ── Builder ─────────────────────────────────────────────────
     @staticmethod
-    def _build(symbol: str, date, signal_type: str, direction: str,
-               strength: float, close_price: float, params: dict) -> dict:
+    def _build(symbol: str, date, signal_type: str, direction: str, strength: float, close_price: float, params: dict) -> dict:
         ts = datetime.combine(date, datetime.min.time()) if hasattr(date, "year") else datetime.fromisoformat(str(date))
         return {
             "symbol": symbol,
@@ -260,9 +258,7 @@ class SignalDetector:
 
     # ── Run all detectors ────────────────────────────────────────
     @classmethod
-    def run(cls, df: pd.DataFrame, symbol: str,
-            ma_pairs: list[tuple[str, str]] | None = None,
-            enable: set[str] | None = None) -> list[dict]:
+    def run(cls, df: pd.DataFrame, symbol: str, ma_pairs: list[tuple[str, str]] | None = None, enable: set[str] | None = None) -> list[dict]:
         if ma_pairs is None:
             ma_pairs = [("ma5", "ma20"), ("ma10", "ma50")]
 

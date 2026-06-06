@@ -1,5 +1,4 @@
 from ssi_fc_data import fc_md_client, model
-import pandas as pd
 from vnstock import Reference, show_api, show_doc
 
 class SSIAPIClient:
@@ -37,6 +36,10 @@ class SSIAPIClient:
         return self.client.daily_index(self.config, req)
 
 class VNSTOCKAPIClient:
+    def testing(self):
+        return 0
+
+class TCBSClient:
     def testing(self):
         return 0
 

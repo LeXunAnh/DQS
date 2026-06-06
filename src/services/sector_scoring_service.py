@@ -122,11 +122,9 @@ def _norm_mfi(x: pd.Series) -> pd.Series:
     """MFI [0,100] → [-1, +1], center = 50."""
     return ((x - 50.0) / 50.0).clip(-1.0, 1.0)
 
-
 def _norm_cmf(x: pd.Series) -> pd.Series:
     """CMF [-1, +1] → [-1, +1], already normalized; clip for safety."""
     return x.clip(-1.0, 1.0)
-
 
 def _norm_rvol(x: pd.Series) -> pd.Series:
     """RVOL [0,∞) → [-1, +1], center = 1.0 (average participation).
@@ -135,16 +133,13 @@ def _norm_rvol(x: pd.Series) -> pd.Series:
     """
     return ((x - 1.0) / 2.0).clip(-1.0, 1.0)
 
-
 def _norm_zscore(x: pd.Series, clip_val: float = 3.0) -> pd.Series:
     """Z-score → [-1, +1] by clipping at ±clip_val."""
     return (x / clip_val).clip(-1.0, 1.0)
 
-
 def _norm_accel(x: pd.Series, clip_val: float = 2.0) -> pd.Series:
     """NMF acceleration → [-1, +1] by clipping at ±clip_val."""
     return (x / clip_val).clip(-1.0, 1.0)
-
 
 def _norm_breadth(x: pd.Series) -> pd.Series:
     """Breadth [0, 1] → [-1, +1], center = 0.5."""
@@ -154,7 +149,6 @@ def _norm_breadth(x: pd.Series) -> pd.Series:
 # ══════════════════════════════════════════════════════════════
 # Score computation  (pure function — operates on full DataFrame)
 # ══════════════════════════════════════════════════════════════
-
 def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add normalized component columns + inst/breadth/total scores to df.
@@ -206,7 +200,6 @@ def compute_scores(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════
 # Ranking  (pure function — per-date rank)
 # ══════════════════════════════════════════════════════════════
-
 def compute_ranks(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add 'rank' column: 1 = strongest sector per date.
@@ -225,7 +218,6 @@ def compute_ranks(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════
 # Regime classification  (pure function — row-wise)
 # ══════════════════════════════════════════════════════════════
-
 def _classify_regime(row: pd.Series) -> tuple[str, float]:
     """
     Classify a single sector-date row into a regime.
@@ -280,7 +272,6 @@ def _classify_regime(row: pd.Series) -> tuple[str, float]:
     # ── Neutral (catch-all) ───────────────────────────────────
     return "Neutral", 3.0
 
-
 def compute_regimes(df: pd.DataFrame) -> pd.DataFrame:
     """Add 'regime' and 'regime_score' columns from score + breadth columns."""
     df = df.copy()
@@ -293,11 +284,7 @@ def compute_regimes(df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════
 # Score deltas  (pure function — requires history)
 # ══════════════════════════════════════════════════════════════
-
-def compute_deltas(
-    current: pd.DataFrame,
-    history: pd.DataFrame,
-) -> pd.DataFrame:
+def compute_deltas(current: pd.DataFrame, history: pd.DataFrame) -> pd.DataFrame:
     """
     Compute score_delta_1d and score_delta_5d.
 
@@ -356,14 +343,12 @@ def compute_deltas(
 # ══════════════════════════════════════════════════════════════
 # Weekly rollup  (pure function)
 # ══════════════════════════════════════════════════════════════
-
 def _iso_year_week(dt) -> int:
     """Convert date → YYYYWW integer using ISO week numbering."""
     if isinstance(dt, str):
         dt = pd.Timestamp(dt)
     iso = dt.isocalendar()
     return int(iso.year) * 100 + int(iso.week)
-
 
 def _modal_regime(regimes: pd.Series) -> str:
     """Most frequent regime in a week; tie → higher regime_score wins."""
@@ -374,7 +359,6 @@ def _modal_regime(regimes: pd.Series) -> str:
     max_count = counts.max()
     candidates = counts[counts == max_count].index.tolist()
     return max(candidates, key=lambda r: REGIME_SCORE.get(r, 3.0))
-
 
 def compute_weekly(daily_df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -442,7 +426,6 @@ def compute_weekly(daily_df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════
 # SectorScoringService
 # ══════════════════════════════════════════════════════════════
-
 class SectorScoringService:
     """
     Compute sector scores, rankings, regimes and weekly roll-ups.
@@ -482,12 +465,7 @@ class SectorScoringService:
     # ──────────────────────────────────────────────────────────
     # DB Helpers
     # ──────────────────────────────────────────────────────────
-
-    def _fetch_factors(
-        self,
-        from_date: str,
-        to_date: str,
-    ) -> pd.DataFrame:
+    def _fetch_factors(self, from_date: str, to_date: str) -> pd.DataFrame:
         """Fetch sector_factor_daily for scoring."""
         query = text("""
             SELECT
@@ -514,11 +492,7 @@ class SectorScoringService:
             logger.error(f"❌ Lỗi fetch sector_factor_daily: {e}")
             return pd.DataFrame()
 
-    def _fetch_score_history(
-        self,
-        from_date: str,
-        to_date: str,
-    ) -> pd.DataFrame:
+    def _fetch_score_history(self, from_date: str, to_date: str) -> pd.DataFrame:
         """Fetch existing sector_score_daily rows for delta lookback."""
         query = text("""
             SELECT date, sector_name, total_score
@@ -578,12 +552,7 @@ class SectorScoringService:
     # ──────────────────────────────────────────────────────────
     # Core Pipeline
     # ──────────────────────────────────────────────────────────
-
-    def _run_pipeline(
-        self,
-        from_date: str,
-        to_date: str,
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _run_pipeline(self, from_date: str, to_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Full scoring pipeline for a date range.
 
@@ -626,7 +595,6 @@ class SectorScoringService:
     # ──────────────────────────────────────────────────────────
     # Public API
     # ──────────────────────────────────────────────────────────
-
     def run_date(self, date: str) -> int:
         """
         Score all sectors for a SINGLE date.
@@ -643,12 +611,7 @@ class SectorScoringService:
         )
         return n
 
-    def run_range(
-        self,
-        from_date: str,
-        to_date: str,
-        batch_days: int = 90,
-    ) -> int:
+    def run_range(self, from_date: str, to_date: str, batch_days: int = 90) -> int:
         """
         Score all sectors for a DATE RANGE in batches.
         batch_days=90 is safe — score computation is lightweight.
@@ -750,12 +713,7 @@ class SectorScoringService:
         )
         return self.run_range(from_date, to_date, batch_days=90)
 
-    def get_latest_ranking(
-        self,
-        date: Optional[str] = None,
-        min_coverage: float = 0.3,
-        min_stocks: int = 3,
-    ) -> pd.DataFrame:
+    def get_latest_ranking(self, date: Optional[str] = None, min_coverage: float = 0.3, min_stocks: int = 3) -> pd.DataFrame:
         """
         Query latest sector ranking for dashboard / screener.
 
@@ -807,10 +765,7 @@ class SectorScoringService:
             logger.error(f"❌ Lỗi get_latest_ranking: {e}")
             return pd.DataFrame()
 
-    def get_weekly_ranking(
-        self,
-        year_week: Optional[int] = None,
-    ) -> pd.DataFrame:
+    def get_weekly_ranking(self, year_week: Optional[int] = None) -> pd.DataFrame:
         """
         Query weekly sector ranking.
 

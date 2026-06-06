@@ -111,34 +111,27 @@ def _cell_style(col: str):
 # ── Data loaders ───────────────────────────────────────────────────────────────
 
 def _load_daily_ranking(scoring_svc, date_str, min_stocks: int) -> pd.DataFrame:
-    return scoring_svc.get_latest_ranking(
-        date=date_str, min_coverage=0.0, min_stocks=min_stocks,
-    )
+    return scoring_svc.get_latest_ranking(date=date_str, min_coverage=0.0, min_stocks=min_stocks)
 
 @st.cache_data(ttl=300)
-def _load_score_history(_db, from_date: str, to_date: str,
-                        sectors: tuple[str, ...]) -> pd.DataFrame:
-    return DatabaseHandler.fetch_sector_score_history(
-        _db, from_date, to_date, list(sectors)
-    )
+def _load_score_history(_db, from_date: str, to_date: str, sectors: tuple[str, ...]) -> pd.DataFrame:
+    return _db.fetch_sector_score_history(from_date, to_date, list(sectors))
 
 @st.cache_data(ttl=300)
 def _load_heatmap_data(_db, from_date: str, to_date: str) -> pd.DataFrame:
-    return DatabaseHandler.fetch_sector_heatmap(_db, from_date, to_date)
+    return _db.fetch_sector_heatmap(from_date, to_date)
 
 @st.cache_data(ttl=300)
-def _load_sector_detail(_db, sector: str,
-                        from_date: str, to_date: str) -> pd.DataFrame:
-    return DatabaseHandler.fetch_sector_detail(_db, sector, from_date, to_date)
+def _load_sector_detail(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
+    return _db.fetch_sector_detail(sector, from_date, to_date)
 
 @st.cache_data(ttl=300)
 def _load_symbol_matrix(_db, sector: str, date_str: str) -> pd.DataFrame:
-    return DatabaseHandler.fetch_symbol_matrix(_db, sector, date_str)
+    return _db.fetch_symbol_matrix(sector, date_str)
 
 @st.cache_data(ttl=300)
-def _load_symbol_history(_db, sector: str,
-                         from_date: str, to_date: str) -> pd.DataFrame:
-    return DatabaseHandler.fetch_symbol_history(_db, sector, from_date, to_date)
+def _load_symbol_history(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
+    return _db.fetch_symbol_history(sector, from_date, to_date)
 
 
 # ── Sub-renderers ──────────────────────────────────────────────────────────────

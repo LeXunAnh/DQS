@@ -15,12 +15,10 @@ class PNFService:
 
     def __init__(self, db_handler: DatabaseHandler):
         self.db = db_handler
-
     # ------------------------------------------------------------------
     # 1. Data Fetching
     # ------------------------------------------------------------------
-    def _fetch_ohlc(self, symbol: str, from_date: Optional[date_type] = None,
-                    to_date: Optional[date_type] = None) -> pd.DataFrame:
+    def _fetch_ohlc(self, symbol: str, from_date: Optional[date_type] = None, to_date: Optional[date_type] = None) -> pd.DataFrame:
         """
         Fetch raw OHLC + adjusted close. If no dates given, fetch all available.
         Uses `close_price_adjusted` as the adjusted close – same as your chart tab.

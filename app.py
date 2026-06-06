@@ -11,7 +11,7 @@ import config
 from src.database.handler import DatabaseHandler
 from src.core.api_client import SSIAPIClient
 from src.core.transformer import DataTransformer
-from src.services.sync_service import SyncService
+from src.core.sync_service import SyncService
 from src.services.gap_service import GapRepairService
 from src.services.indicator_service import IndicatorService
 from src.services.signal_service import SignalService

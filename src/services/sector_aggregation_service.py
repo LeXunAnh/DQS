@@ -86,12 +86,10 @@ def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
     v = values[mask]
     return float((v * w).sum() / w.sum())
 
-
 def _safe_median(values: pd.Series) -> float:
     """Cross-sectional median, NaN-safe."""
     clean = values.dropna()
     return float(clean.median()) if len(clean) > 0 else np.nan
-
 
 def _breadth(values: pd.Series, condition) -> float:
     """
@@ -103,7 +101,6 @@ def _breadth(values: pd.Series, condition) -> float:
     if len(clean) == 0:
         return np.nan
     return float(condition(clean).sum() / len(clean))
-
 
 def _aggregate_group(group: pd.DataFrame) -> dict:
     """
@@ -174,13 +171,7 @@ class SectorAggregationService:
     # ──────────────────────────────────────────────────────────
     # DB Helpers
     # ──────────────────────────────────────────────────────────
-
-    def _fetch_stock_mf(
-        self,
-        from_date: str,
-        to_date: str,
-        sector_name: Optional[str] = None,
-    ) -> pd.DataFrame:
+    def _fetch_stock_mf(self, from_date: str, to_date: str, sector_name: Optional[str] = None,) -> pd.DataFrame:
         """
         Fetch stock_mf_daily for a date range.
         Optional sector_name filter for targeted re-runs.
@@ -244,11 +235,7 @@ class SectorAggregationService:
             logger.error(f"❌ Lỗi lấy max date sector_factor_daily: {e}")
             return None
 
-    def _get_available_mf_dates(
-        self,
-        from_date: str,
-        to_date: str,
-    ) -> list[date_type]:
+    def _get_available_mf_dates(self, from_date: str, to_date: str) -> list[date_type]:
         """Distinct dates available in stock_mf_daily for a range."""
         query = text("""
             SELECT DISTINCT date
@@ -278,7 +265,6 @@ class SectorAggregationService:
     # ──────────────────────────────────────────────────────────
     # Core Aggregation
     # ──────────────────────────────────────────────────────────
-
     def _aggregate(self, stock_df: pd.DataFrame) -> pd.DataFrame:
         """
         Aggregate a stock_mf_daily DataFrame into sector_factor_daily rows.
@@ -334,7 +320,6 @@ class SectorAggregationService:
     # ──────────────────────────────────────────────────────────
     # Public API
     # ──────────────────────────────────────────────────────────
-
     def run_date(self, date: str) -> int:
         """
         Aggregate all sectors for a SINGLE date.
@@ -356,12 +341,8 @@ class SectorAggregationService:
         logger.info(f"✅ Aggregated {n} sectors @ {date}")
         return n
 
-    def run_range(
-            self,
-            from_date: str,
-            to_date: str,
-            batch_days: int = 30,  # Vẫn giữ tham số này để không làm hỏng các chỗ khác đang gọi nó
-    ) -> int:
+    def run_range(self, from_date: str, to_date: str, batch_days: int = 30) -> int:
+        # Vẫn giữ tham số batch_days để không làm hỏng các chỗ khác đang gọi nó
         """
         Aggregate all sectors for a DATE RANGE.
         (ĐÃ SỬA LỖI: Chuyển sang lặp từng ngày và gọi hàm run_date đang hoạt động tốt)

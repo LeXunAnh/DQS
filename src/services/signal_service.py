@@ -37,6 +37,7 @@ from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
 from src.services.sig_detect_service import SignalDetector
+from src.services.base_symbol_service import BaseSymbolService
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 # SIGNAL SERVICE  (tích hợp DB)
 # ═══════════════════════════════════════════════════════════════
 
-class SignalService:
+class SignalService(BaseSymbolService):
     """
     Điều phối phát hiện & lưu trữ tín hiệu giao dịch.
 
@@ -55,18 +56,12 @@ class SignalService:
         svc.run_maintenance("HOSE")   # chỉ tính ngày chưa có signal
     """
 
-    def __init__(
-        self,
-        db_handler: DatabaseHandler,
-        ma_pairs: list[tuple[str, str]] | None = None,
-        enable: set[str] | None = None,
-    ):
-        self.db       = db_handler
-        self.ma_pairs = ma_pairs  # None → dùng default của _SignalDetector
+    def __init__(self, db_handler: DatabaseHandler, ma_pairs: list[tuple[str, str]] | None = None, enable: set[str] | None = None):
+        super().__init__(db_handler)
+        self.ma_pairs = ma_pairs  # None → dùng default của SignalDetector
         self.enable   = enable    # None → bật tất cả
 
     # ─── DB helpers ─────────────────────────────────────────────
-
     def _fetch_indicators(self, symbol: str, from_date: Optional[str] = None) -> pd.DataFrame:
         """
         JOIN technical_indicators với daily_stock_prices để lấy giá điều chỉnh
@@ -112,7 +107,7 @@ class SignalService:
             logger.error(f"❌ Lỗi fetch indicators {symbol}: {e}")
             return pd.DataFrame()
 
-    def _get_latest_signal_date(self, symbol: str):
+    def _get_latest_date(self, symbol: str):
         query = text(
             "SELECT MAX(signal_date) FROM trading_signals WHERE symbol = :sym"
         )
@@ -193,57 +188,6 @@ class SignalService:
         self._save(signals)
         logger.info(f"✅ {symbol}: Ghi {len(signals)} tín hiệu")
         return len(signals)
-
-    def run_all(self, market: str = "HOSE", from_date: Optional[str] = None) -> int:
-        """Phát hiện tín hiệu cho TOÀN BỘ mã trên sàn."""
-        symbols = self.db.get_all_symbols_except_CQ(market=market, only_companies=True)
-        logger.info(f"🚀 Phát hiện tín hiệu: {len(symbols)} mã | sàn {market}")
-
-        total = ok = fail = 0
-        pbar = tqdm(symbols, desc=f"Signals {market}", unit="sym")
-        for sym in pbar:
-            pbar.set_postfix({"current": sym})
-            try:
-                n = self.run_one(sym, from_date)
-                total += n
-                ok += 1
-            except Exception as e:
-                logger.error(f"❌ {sym}: {e}")
-                fail += 1
-
-        logger.info(f"✅ Hoàn tất: {total} tín hiệu | {ok} mã OK / {fail} lỗi")
-        return total
-
-    def run_maintenance(self, market: str = "HOSE") -> int:
-        """
-        Chế độ BẢO TRÌ: chỉ tính các ngày chưa có tín hiệu.
-        An toàn để chạy hàng ngày sau market close.
-        """
-        symbols = self.db.get_all_symbols_except_CQ(market=market, only_companies=True)
-        logger.info(f"🔄 Bảo trì signals: {len(symbols)} mã | sàn {market}")
-
-        today = datetime.now().date()
-        total = ok = skip = fail = 0
-        pbar = tqdm(symbols, desc=f"Maintenance signals {market}", unit="sym")
-
-        for sym in pbar:
-            pbar.set_postfix({"current": sym})
-            try:
-                last = self._get_latest_signal_date(sym)
-                if last and last >= today:
-                    skip += 1
-                    continue
-
-                from_date = (last + timedelta(days=1)).strftime("%Y-%m-%d") if last else None
-                n = self.run_one(sym, from_date)
-                total += n
-                ok += 1
-            except Exception as e:
-                logger.error(f"❌ {sym}: {e}")
-                fail += 1
-
-        logger.info(f"✅ Bảo trì xong: {total} tín hiệu mới | {ok} cập nhật / {skip} bỏ qua / {fail} lỗi")
-        return total
 
     def get_latest_signals(self,market: str = "HOSE",date: Optional[str] = None,direction: Optional[str] = None,min_strength: float = 0.0,signal_types: Optional[list[str]] = None,limit: int = 100,) -> pd.DataFrame:
         """
