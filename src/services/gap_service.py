@@ -1,4 +1,4 @@
-from .sync_service import SyncService
+from src.core.sync_service import SyncService
 from src.database.handler import DatabaseHandler
 from tqdm import tqdm
 import logging

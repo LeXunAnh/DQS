@@ -358,7 +358,7 @@ class SyncService:
                 # Tính toán ngày bắt đầu dựa theo chế độ chạy
                 if maintenance_mode:
                     # Lấy ngày lớn nhất hiện tại của index_code này trong bảng daily_index
-                    last_date = self.db.get_latest_trading_date_index('daily_index', index_code)
+                    last_date = self.db.get_latest_trading_date('daily_index', index_code)
                     start_date = (last_date + timedelta(days=1)) if last_date \
                         else datetime.strptime(from_date, '%d/%m/%Y').date()
                 else:

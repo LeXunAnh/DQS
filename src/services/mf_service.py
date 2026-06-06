@@ -42,11 +42,13 @@ from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
 from src.indicators.mf_indicators import calc_mf_indicators
+from src.utils.price_utils import adjust_prices
+from src.services.base_symbol_service import BaseSymbolService
 
 logger = logging.getLogger(__name__)
 
 
-class MFService:
+class MFService(BaseSymbolService):
     """
     Compute and persist stock-level money flow indicators.
 
@@ -72,48 +74,10 @@ class MFService:
         "trading_value",
     ]
 
-    def __init__(self, db_handler: DatabaseHandler):
-        self.db = db_handler
-
-    # ──────────────────────────────────────────────────────────
-    # Price Adjustment  (mirrors IndicatorService._adjust_prices)
-    # ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _adjust_prices(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply close_price_adjusted / close_price factor to OHLC.
-
-        adj_factor     = close_price_adjusted / close_price
-        adj_close      → replaces close_price
-        adj_high       → replaces highest_price
-        adj_low        → replaces lowest_price
-        adj_open       → replaces open_price
-
-        Volume & foreign flow columns are NOT adjusted.
-        Rows with close_price <= 0 or null adjusted are dropped.
-        """
-        valid = (df["close_price"] > 0) & df["close_price_adjusted"].notna()
-        df = df[valid].copy()
-
-        adj_factor = (df["close_price_adjusted"] / df["close_price"]).fillna(1.0)
-
-        df["close_price"]    = df["close_price_adjusted"].round(2)
-        df["open_price"]     = (df["open_price"]     * adj_factor).round(2)
-        df["highest_price"]  = (df["highest_price"]  * adj_factor).round(2)
-        df["lowest_price"]   = (df["lowest_price"]   * adj_factor).round(2)
-
-        return df.reset_index(drop=True)
-
     # ──────────────────────────────────────────────────────────
     # DB Helpers
     # ──────────────────────────────────────────────────────────
-
-    def _fetch_prices(
-        self,
-        symbol: str,
-        from_date: Optional[str] = None,
-    ) -> pd.DataFrame:
+    def _fetch_prices(self, symbol: str, from_date: Optional[str] = None) -> pd.DataFrame:
         """
         Fetch daily_stock_prices for one symbol with warmup prepended.
 
@@ -197,7 +161,7 @@ class MFService:
             logger.error(f"❌ Lỗi bulk fetch sector: {e}")
             return {}
 
-    def _get_latest_mf_date(self, symbol: str):
+    def _get_latest_date(self, symbol: str):
         """Latest date already stored in stock_mf_daily for this symbol."""
         query = text(
             "SELECT MAX(date) FROM stock_mf_daily WHERE symbol = :sym"
@@ -222,14 +186,7 @@ class MFService:
     # ──────────────────────────────────────────────────────────
     # Compute Pipeline
     # ──────────────────────────────────────────────────────────
-
-    def _compute(
-        self,
-        symbol: str,
-        raw: pd.DataFrame,
-        sector_name: Optional[str],
-        from_date: Optional[str] = None,
-    ) -> pd.DataFrame:
+    def _compute(self, symbol: str, raw: pd.DataFrame, sector_name: Optional[str], from_date: Optional[str] = None) -> pd.DataFrame:
         """
         Full pipeline for one symbol:
         1. Adjust prices
@@ -237,7 +194,7 @@ class MFService:
         3. Attach metadata columns (date, symbol, sector_name, trading_value)
         4. Slice to from_date (warmup rows removed)
         """
-        df = self._adjust_prices(raw)
+        df = adjust_prices(raw)
         df = calc_mf_indicators(df)
 
         # Rename trading_date → date for DB column
@@ -258,11 +215,14 @@ class MFService:
     # Public API
     # ──────────────────────────────────────────────────────────
 
-    def run_one(
-        self,
-        symbol: str,
-        from_date: Optional[str] = None,
-    ) -> bool:
+    def _before_run_all(self, symbols: list[str], from_date) -> None:
+        """
+        Pre-loop hook called by BaseSymbolService.run_all and run_maintenance.
+        Loads all sector mappings in ONE query so run_one avoids N+1 lookups.
+        """
+        self._sector_map: dict[str, str] = self._fetch_sector_bulk(symbols)
+
+    def run_one(self, symbol: str, from_date: Optional[str] = None) -> int:
         """
         Compute and save MF indicators for ONE symbol.
 
@@ -276,136 +236,29 @@ class MFService:
         raw = self._fetch_prices(symbol, from_date)
         if raw.empty:
             logger.warning(f"⚠️  {symbol}: Không có dữ liệu giá")
-            return False
+            return 0
 
         if len(raw) < self.MIN_HISTORY_DAYS:
             logger.warning(
                 f"⚠️  {symbol}: Chỉ có {len(raw)} bars "
                 f"(cần ít nhất {self.MIN_HISTORY_DAYS}), bỏ qua"
             )
-            return False
+            return 0
 
-        sector = self._fetch_sector(symbol)
+        # Use pre-fetched map when available (batch runs), else fetch individually
+        sector_map = getattr(self, "_sector_map", None)
+        sector = sector_map.get(symbol) if sector_map is not None else self._fetch_sector(symbol)
+
         result = self._compute(symbol, raw, sector, from_date)
-
         if result.empty:
-            return False
+            return 0
 
         self._save(result)
-        logger.info(f"✅ {symbol} [{sector or 'N/A'}]: Ghi {len(result)} rows")
-        return True
+        n = len(result)
+        logger.info(f"✅ {symbol} [{sector or 'N/A'}]: Ghi {n} rows")
+        return n
 
-    def run_all(
-        self,
-        market: str = "HOSE",
-        from_date: Optional[str] = None,
-    ) -> int:
-        """
-        Compute and save MF indicators for ALL symbols on a market.
-        Fetches sector mapping once (bulk query) to avoid N+1 lookups.
-        Returns:
-            Total number of symbols processed successfully.
-        """
-        symbols = self.db.get_all_symbols_except_CQ(
-            market=market, only_companies=True
-        )
-        logger.info(
-            f"🚀 MF indicators: {len(symbols)} mã | sàn {market}"
-            + (f" | từ {from_date}" if from_date else " | toàn bộ lịch sử")
-        )
-
-        # Bulk sector lookup — one query instead of N queries
-        sector_map = self._fetch_sector_bulk(symbols)
-
-        ok = fail = 0
-        pbar = tqdm(symbols, desc=f"MF {market}", unit="sym")
-
-        for sym in pbar:
-            pbar.set_postfix({"current": sym})
-            try:
-                raw = self._fetch_prices(sym, from_date)
-                if raw.empty or len(raw) < self.MIN_HISTORY_DAYS:
-                    fail += 1
-                    continue
-
-                sector = sector_map.get(sym)
-                result = self._compute(sym, raw, sector, from_date=from_date)
-
-                if result.empty:
-                    fail += 1
-                    continue
-
-                self._save(result)
-                ok += 1
-            except Exception as e:
-                logger.error(f"❌ {sym}: {e}")
-                fail += 1
-
-        logger.info(f"✅ Hoàn tất MF: {ok} thành công / {fail} thất bại")
-        return ok
-
-    def run_maintenance(self, market: str = "HOSE") -> int:
-        """
-        Maintenance mode — only compute dates not yet in stock_mf_daily.
-        Safe to run daily after market close.
-
-        Returns:
-            Number of symbols updated.
-        """
-        symbols = self.db.get_all_symbols_except_CQ(
-            market=market, only_companies=True
-        )
-        logger.info(f"🔄 Bảo trì MF indicators: {len(symbols)} mã | sàn {market}")
-
-        sector_map = self._fetch_sector_bulk(symbols)
-
-        today  = datetime.now().date()
-        ok = skip = fail = 0
-        pbar = tqdm(symbols, desc=f"Maintenance MF {market}", unit="sym")
-
-        for sym in pbar:
-            pbar.set_postfix({"current": sym})
-            try:
-                last = self._get_latest_mf_date(sym)
-
-                # Already up to date
-                if last and last >= today:
-                    skip += 1
-                    continue
-
-                from_date = (
-                    (last + timedelta(days=1)).strftime("%Y-%m-%d")
-                    if last else None
-                )
-
-                raw = self._fetch_prices(sym, from_date)
-                if raw.empty or len(raw) < self.MIN_HISTORY_DAYS:
-                    fail += 1
-                    continue
-
-                sector = sector_map.get(sym)
-                result = self._compute(sym, raw, sector, from_date)
-
-                if result.empty:
-                    skip += 1
-                    continue
-
-                self._save(result)
-                ok += 1
-            except Exception as e:
-                logger.error(f"❌ {sym}: {e}")
-                fail += 1
-
-        logger.info(
-            f"✅ Bảo trì MF xong: {ok} cập nhật / {skip} bỏ qua / {fail} lỗi"
-        )
-        return ok
-
-    def run_single_date(
-        self,
-        symbol: str,
-        date: str,
-    ) -> Optional[pd.Series]:
+    def run_single_date(self, symbol: str, date: str) -> Optional[pd.Series]:
         """
         Compute MF indicators for ONE symbol on ONE specific date.
         Useful for debugging and backfilling individual rows.

@@ -100,17 +100,6 @@ class DatabaseHandler:
             logger.error(f"Lỗi khi lấy danh sách mã công ty: {e}")
             raise
 
-    def get_latest_trading_date(self, table_name, symbol):
-        """Lấy ngày giao dịch gần nhất của 1 mã trong bảng được chỉ định"""
-        query = text(f"SELECT MAX(trading_date) FROM {table_name} WHERE symbol = :symbol")
-        try:
-            with self.engine.connect() as conn:
-                result = conn.execute(query, {"symbol": symbol}).scalar()
-                return result  # Trả về đối tượng date hoặc None
-        except Exception as e:
-            logger.error(f"Lỗi khi lấy max date của {symbol}: {e}")
-            return None
-
     def get_latest_trading_date_index(self, table_name, symbol):
         """Lấy ngày giao dịch gần nhất của 1 mã trong bảng được chỉ định (Hỗ trợ cả Stock và Index)"""
 
@@ -126,6 +115,25 @@ class DatabaseHandler:
                 return result  # Trả về đối tượng date hoặc None
         except Exception as e:
             logger.error(f"Lỗi khi lấy max date của {symbol} trong bảng {table_name}: {e}")
+            return None
+
+    def get_latest_trading_date(self, table_name: str, symbol: str) -> date_type | None:
+        """
+        Lấy ngày giao dịch gần nhất của 1 mã / index trong bảng được chỉ định.
+
+        Tự động chọn tên cột điều kiện:
+          • Bảng có chữ 'index' trong tên → dùng cột 'index_code'
+          • Ngược lại                     → dùng cột 'symbol'
+        """
+        col = "index_code" if "index" in table_name.lower() else "symbol"
+        query = text(
+            f"SELECT MAX(trading_date) FROM {table_name} WHERE {col} = :identifier"
+        )
+        try:
+            with self.engine.connect() as conn:
+                return conn.execute(query, {"identifier": symbol}).scalar()
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy max date của {symbol} trong {table_name}: {e}")
             return None
 
     def optimize_db(self):
@@ -200,8 +208,20 @@ class DatabaseHandler:
             logger.error(f"Lỗi khi lấy danh sách chỉ số cho sàn {market}: {e}")
             return []
 
-    @staticmethod
-    def fetch_price_with_warmup(db, symbol: str, start: date_type, end: date_type, ) -> pd.DataFrame:
+    # def get_latest_trading_date(self, table_name, symbol):
+    #     """Lấy ngày giao dịch gần nhất của 1 mã trong bảng được chỉ định"""
+    #     query = text(f"SELECT MAX(trading_date) FROM {table_name} WHERE symbol = :symbol")
+    #     try:
+    #         with self.engine.connect() as conn:
+    #             result = conn.execute(query, {"symbol": symbol}).scalar()
+    #             return result  # Trả về đối tượng date hoặc None
+    #     except Exception as e:
+    #         logger.error(f"Lỗi khi lấy max date của {symbol}: {e}")
+    #         return None
+
+
+# ── Chart/ UI fetch methods ────────────────────────────────────────
+    def fetch_price_with_warmup(self, symbol: str, start: date_type, end: date_type) -> pd.DataFrame:
         """Fetch giá với warmup 270 ngày lịch để MA200 hội tụ đúng."""
         warmup = start - timedelta(days=270)
         q = text("""
@@ -216,32 +236,33 @@ class DatabaseHandler:
             ORDER BY trading_date
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn, params={"sym": symbol, "s": warmup, "e": end})
             df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
             return df
         except Exception as ex:
-            logging.error(f"Lỗi fetch price {symbol}: {ex}")
+            logger.error(f"Lỗi fetch price {symbol}: {ex}")
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_signals_for_chart(db, symbol: str, start: date_type, end: date_type, ) -> pd.DataFrame:
+    def fetch_signals_for_chart(self, symbol: str, start: date_type, end: date_type) -> pd.DataFrame:
+        """Fetch trading signals cho một mã trong khoảng ngày — dùng cho chart."""
         q = text("""
             SELECT signal_date, signal_type, signal_direction, strength, close_price
             FROM trading_signals
-            WHERE symbol = :sym AND signal_date BETWEEN :s AND :e
+            WHERE symbol = :sym
+              AND signal_date BETWEEN :s AND :e
             ORDER BY signal_date
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn, params={"sym": symbol, "s": start, "e": end})
             df["signal_date"] = pd.to_datetime(df["signal_date"]).dt.date
             return df
         except Exception:
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_indicator_data(db, symbol: str, start: date_type, end: date_type, ) -> pd.DataFrame:
+    def fetch_indicator_data(self, symbol: str, start: date_type, end: date_type) -> pd.DataFrame:
+        """Fetch vol_ma20 từ technical_indicators — dùng cho volume panel trên chart."""
         q = text("""
             SELECT trading_date, vol_ma20
             FROM technical_indicators
@@ -250,21 +271,20 @@ class DatabaseHandler:
             ORDER BY trading_date
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn, params={"sym": symbol, "s": start, "e": end})
             df["trading_date"] = pd.to_datetime(df["trading_date"]).dt.date
             return df
         except Exception as e:
-            logging.error(f"Lỗi lấy indicators cho {symbol}: {e}")
+            logger.error(f"Lỗi lấy indicators cho {symbol}: {e}")
             return pd.DataFrame()
 
 
 # ── Sector Rotation fetch methods ────────────────────────────────────────
-    @staticmethod
-    def fetch_sector_score_history(db,from_date: str,to_date: str,sectors: list[str],) -> pd.DataFrame:
+    def fetch_sector_score_history(self, from_date: str, to_date: str, sectors: list[str]) -> pd.DataFrame:
         """
-        Fetch sector_score_daily time-series for selected sectors.
-        Used by the score trend chart in the Sector Rotation dashboard.
+        Fetch sector_score_daily time-series cho các ngành được chọn.
+        Dùng cho score trend chart trong Sector Rotation dashboard.
         """
         q = text("""
             SELECT date, sector_name, total_score, inst_score,
@@ -275,7 +295,7 @@ class DatabaseHandler:
             ORDER BY date ASC, sector_name
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn,
                                  params={"f": from_date, "t": to_date,
                                          "secs": list(sectors)})
@@ -285,11 +305,10 @@ class DatabaseHandler:
             logger.error(f"❌ Lỗi fetch sector score history: {e}")
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_sector_heatmap(db,from_date: str,to_date: str,) -> pd.DataFrame:
+    def fetch_sector_heatmap(self, from_date: str, to_date: str) -> pd.DataFrame:
         """
-        Fetch (date, sector_name, total_score, regime) for the regime heatmap.
-        Returns all sectors in the date range — caller slices to last N days.
+        Fetch (date, sector_name, total_score, regime) cho regime heatmap.
+        Caller tự slice lấy N ngày gần nhất.
         """
         q = text("""
             SELECT date, sector_name, total_score, regime
@@ -298,7 +317,7 @@ class DatabaseHandler:
             ORDER BY date ASC, sector_name
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn, params={"f": from_date, "t": to_date})
             df["date"] = pd.to_datetime(df["date"]).dt.date
             return df
@@ -306,17 +325,16 @@ class DatabaseHandler:
             logger.error(f"❌ Lỗi fetch sector heatmap: {e}")
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_sector_detail(db,sector: str,from_date: str,to_date: str,) -> pd.DataFrame:
+    def fetch_sector_detail(self, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
         """
-        Fetch sector_factor_daily + sector_score_daily for one sector.
-        Used by the drill-down indicator time-series charts.
+        Fetch sector_factor_daily JOIN sector_score_daily cho một ngành.
+        Dùng cho drill-down indicator time-series charts.
         """
         q = text("""
             SELECT
                 sfd.date,
-                sfd.weighted_mfi,  sfd.median_mfi,
-                sfd.weighted_cmf,  sfd.median_cmf,
+                sfd.weighted_mfi,   sfd.median_mfi,
+                sfd.weighted_cmf,   sfd.median_cmf,
                 sfd.weighted_rvol,
                 sfd.weighted_nmf_z, sfd.weighted_nff_z,
                 sfd.weighted_accel,
@@ -332,28 +350,20 @@ class DatabaseHandler:
             ORDER BY sfd.date ASC
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn,
-                                 params={"sec": sector,
-                                         "f": from_date, "t": to_date})
+                                 params={"sec": sector, "f": from_date, "t": to_date})
             df["date"] = pd.to_datetime(df["date"])
             return df
         except Exception as e:
             logger.error(f"❌ Lỗi fetch sector detail {sector}: {e}")
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_symbol_matrix(db,sector: str,date_str: str,) -> pd.DataFrame:
+    def fetch_symbol_matrix(self, sector: str, date_str: str) -> pd.DataFrame:
         """
-        Fetch all symbols in a sector for ONE date with MF indicators
-        and latest-day price change.
-
-        Joins:
-            stock_mf_daily  → MF indicators + trading_value
-            securities      → stock_name
-            daily_stock_prices → close_price, per_price_change
-
-        Sorted by trading_value DESC (most liquid first).
+        Fetch tất cả cổ phiếu trong một ngành cho MỘT ngày.
+        Kết hợp: stock_mf_daily + securities + daily_stock_prices.
+        Sắp xếp theo trading_value DESC (thanh khoản cao nhất lên đầu).
         """
         q = text("""
             SELECT
@@ -371,14 +381,14 @@ class DatabaseHandler:
             FROM stock_mf_daily smd
             JOIN securities s ON s.symbol = smd.symbol
             LEFT JOIN daily_stock_prices dsp
-                   ON dsp.symbol      = smd.symbol
+                   ON dsp.symbol       = smd.symbol
                   AND dsp.trading_date = smd.date
             WHERE smd.sector_name = :sector
               AND smd.date = :date
             ORDER BY smd.trading_value DESC NULLS LAST
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn,
                                  params={"sector": sector, "date": date_str})
             return df
@@ -386,12 +396,10 @@ class DatabaseHandler:
             logger.error(f"❌ Lỗi fetch symbol matrix {sector} @ {date_str}: {e}")
             return pd.DataFrame()
 
-    @staticmethod
-    def fetch_symbol_history(db,sector: str,from_date: str,to_date: str,) -> pd.DataFrame:
+    def fetch_symbol_history(self, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
         """
-        Fetch stock_mf_daily time-series for ALL symbols in a sector.
-        Used for the multi-date symbol matrix (rows=symbol, cols=date).
-        Sorted by date ASC, then trading_value DESC within each date.
+        Fetch stock_mf_daily time-series cho TẤT CẢ cổ phiếu trong một ngành.
+        Dùng cho multi-date symbol matrix (rows=symbol, cols=date).
         """
         q = text("""
             SELECT
@@ -412,7 +420,7 @@ class DatabaseHandler:
             ORDER BY smd.date ASC, smd.trading_value DESC NULLS LAST
         """)
         try:
-            with db.engine.connect() as conn:
+            with self.engine.connect() as conn:
                 df = pd.read_sql(q, conn,
                                  params={"sector": sector,
                                          "f": from_date, "t": to_date})

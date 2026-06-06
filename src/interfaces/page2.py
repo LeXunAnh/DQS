@@ -99,7 +99,7 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
     t2_show_sig = len(t2_sig_filter) > 0
 
     # ── Fetch & process ───────────────────────────────────────────────────────
-    raw_df = DatabaseHandler.fetch_price_with_warmup(db, t2_symbol, start_date, today)
+    raw_df = db.fetch_price_with_warmup(t2_symbol, start_date, today)
 
     if raw_df.empty:
         st.warning(f"Không có dữ liệu giá cho {t2_symbol}.")
@@ -108,7 +108,7 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
     raw_adj  = compute_adj_prices(raw_df)
     price_df = raw_adj[raw_adj["trading_date"] >= start_date].reset_index(drop=True)
 
-    ind_df = DatabaseHandler.fetch_indicator_data(db, t2_symbol, start_date, today)
+    ind_df = db.fetch_indicator_data(t2_symbol, start_date, today)
     if not ind_df.empty:
         price_df = price_df.merge(ind_df, on="trading_date", how="left")
     else:
@@ -146,7 +146,7 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
 
     sig_df = pd.DataFrame()
     if t2_show_sig:
-        sig_df = DatabaseHandler.fetch_signals_for_chart(db, t2_symbol, start_date, today)
+        sig_df = db.fetch_signals_for_chart(t2_symbol, start_date, today)
         if not sig_df.empty:
             sig_df = sig_df[sig_df["signal_type"].isin(t2_sig_filter)]
 
