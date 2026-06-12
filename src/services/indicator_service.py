@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from typing import Optional
 
 from src.indicators import ma,atr,bollinger,foreign_flow,macd,rsi,stochastic,volume
@@ -10,7 +9,7 @@ from src.services.base_symbol_service import BaseSymbolService
 
 import pandas as pd
 from sqlalchemy import text
-from tqdm import tqdm
+
 
 from src.database.handler import DatabaseHandler
 
@@ -28,7 +27,25 @@ class IndicatorService(BaseSymbolService):
     """
 
     # Cần ít nhất bao nhiêu nến để kết quả có ý nghĩa (MA200)
-    MIN_HISTORY_DAYS = 210
+    _label = "Indicators"
+
+    # Cần ít nhất bao nhiêu nến để kết quả có ý nghĩa (MA200)
+    MIN_HISTORY_DAYS = 300
+    _WARMUP_BUFFER = 30
+
+    _PRICE_COLUMNS = (
+        "trading_date",
+        "open_price",
+        "highest_price",
+        "lowest_price",
+        "close_price",
+        "close_price_adjusted",
+        "total_traded_vol",
+        "net_buy_sell_vol",
+        "net_buy_sell_val",
+    )
+    # No extra WHERE filters — invalid rows are dropped inside adjust_prices()
+    _EXTRA_WHERE = ""
 
     # Cột DB output tương ứng với cột pandas
     _OUTPUT_COLS = [
@@ -48,51 +65,6 @@ class IndicatorService(BaseSymbolService):
         "net_foreign_vol_5d", "net_foreign_vol_10d",
         "net_foreign_val_5d", "net_foreign_val_10d",
     ]
-
-    # ─── DB helpers ─────────────────────────────────────────────
-    def _fetch_prices(self, symbol: str, from_date: Optional[str] = None) -> pd.DataFrame:
-        """
-        Lấy giá từ daily_stock_prices cho một mã.
-        Luôn lấy thêm MIN_HISTORY_DAYS trước from_date để đảm bảo
-        MA200 có đủ lookback khi chỉ muốn tính từ một ngày cụ thể.
-        """
-        params: dict = {"symbol": symbol}
-        date_clause = ""
-
-        if from_date:
-            # Lùi thêm MIN_HISTORY_DAYS để warmup các chỉ báo dài hạn
-            warmup = (
-                datetime.strptime(from_date, "%Y-%m-%d")
-                - timedelta(days=self.MIN_HISTORY_DAYS + 30)
-            ).strftime("%Y-%m-%d")
-            date_clause = "AND trading_date >= :warmup"
-            params["warmup"] = warmup
-
-        query = text(f"""
-            SELECT
-                trading_date,
-                open_price,
-                highest_price,
-                lowest_price,
-                close_price,
-                close_price_adjusted,
-                total_traded_vol,
-                net_buy_sell_vol,
-                net_buy_sell_val
-            FROM daily_stock_prices
-            WHERE symbol = :symbol
-              {date_clause}
-            ORDER BY trading_date ASC
-        """)
-
-        try:
-            with self.db.engine.connect() as conn:
-                df = pd.read_sql(query, conn, params=params)
-            df["trading_date"] = pd.to_datetime(df["trading_date"])
-            return df
-        except Exception as e:
-            logger.error(f"❌ Lỗi fetch giá {symbol}: {e}")
-            return pd.DataFrame()
 
     def _get_latest_date(self, symbol: str):
         """Ngày gần nhất đã có indicator trong DB (hoặc None)"""

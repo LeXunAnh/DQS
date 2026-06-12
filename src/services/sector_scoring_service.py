@@ -76,6 +76,7 @@ from sqlalchemy import text
 from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
+from src.services.base_sector_service import BaseSectorService
 
 logger = logging.getLogger(__name__)
 
@@ -426,7 +427,7 @@ def compute_weekly(daily_df: pd.DataFrame) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════
 # SectorScoringService
 # ══════════════════════════════════════════════════════════════
-class SectorScoringService:
+class SectorScoringService(BaseSectorService):
     """
     Compute sector scores, rankings, regimes and weekly roll-ups.
 
@@ -458,9 +459,6 @@ class SectorScoringService:
         "rank", "regime", "regime_score",
         "score_delta_1w", "n_trading_days",
     ]
-
-    def __init__(self, db_handler: DatabaseHandler):
-        self.db = db_handler
 
     # ──────────────────────────────────────────────────────────
     # DB Helpers
@@ -528,7 +526,7 @@ class SectorScoringService:
             logger.error(f"❌ Lỗi fetch weekly history: {e}")
             return pd.DataFrame()
 
-    def _get_latest_score_date(self) -> Optional[date_type]:
+    def _get_latest_date(self) -> Optional[date_type]:
         query = text("SELECT MAX(date) FROM sector_score_daily")
         try:
             with self.db.engine.connect() as conn:
@@ -557,40 +555,111 @@ class SectorScoringService:
         Full scoring pipeline for a date range.
 
         Returns: (sector_score_daily df, sector_rank_weekly df)
+        Note: only rows in [from_date, to_date] are saved; extra history
+        rows fetched for weekly completeness and delta computation are
+        stripped before returning.
         """
-        # ── 1. Fetch factors ────────────────────────────────
-        factors = self._fetch_factors(from_date, to_date)
-        if factors.empty:
+        from_dt = datetime.strptime(from_date, "%Y-%m-%d")
+        to_dt   = datetime.strptime(to_date,   "%Y-%m-%d")
+
+        # ── 1. Expand date window to full ISO weeks ──────────
+        # so compute_weekly sees every trading day of each partial week.
+        # weekday(): Mon=0 … Sun=6
+        week_start_dt = from_dt - timedelta(days=from_dt.weekday())       # Monday of from_date's week
+        week_end_dt   = to_dt   + timedelta(days=(4 - to_dt.weekday()))   # Friday of to_date's week
+        week_start    = week_start_dt.strftime("%Y-%m-%d")
+        week_end      = week_end_dt.strftime("%Y-%m-%d")
+
+        # ── 2. Fetch factors for the FULL week window ────────
+        factors_full = self._fetch_factors(week_start, week_end)
+        if factors_full.empty:
             logger.warning(
                 f"⚠️  Không có sector_factor_daily data: "
                 f"{from_date} → {to_date}"
             )
             return pd.DataFrame(), pd.DataFrame()
 
-        # ── 2. Fetch score history for delta computation ─────
+        # ── 3. Fetch score history for delta computation ─────
         history_from = (
-            datetime.strptime(from_date, "%Y-%m-%d")
-            - timedelta(days=self._DELTA_LOOKBACK_DAYS)
+            from_dt - timedelta(days=self._DELTA_LOOKBACK_DAYS)
         ).strftime("%Y-%m-%d")
 
         history = self._fetch_score_history(history_from, from_date)
 
-        # ── 3. Compute scores ────────────────────────────────
-        scored = compute_scores(factors)
+        # ── 4. Fetch already-saved scores for days in the full
+        #       week window that fall BEFORE from_date — needed so
+        #       compute_weekly aggregates a complete week and
+        #       compute_deltas has correct positional lag. ────────
+        if week_start < from_date:
+            saved_week_scores = self._fetch_score_history(week_start, from_date)
+        else:
+            saved_week_scores = pd.DataFrame()
 
-        # ── 4. Compute score deltas ──────────────────────────
-        scored = compute_deltas(scored, history)
+        # ── 5. Fetch prior-week scores for score_delta_1w ────
+        #  We need at least one prior week in the weekly rollup
+        #  so that diff(1) can compute a delta for the current week.
+        prior_week_end_dt   = week_start_dt - timedelta(days=1)           # Sunday before our window
+        prior_week_start_dt = prior_week_end_dt - timedelta(days=6)       # Monday of that week
+        prior_week_start    = prior_week_start_dt.strftime("%Y-%m-%d")
+        prior_week_end      = prior_week_end_dt.strftime("%Y-%m-%d")
+        prior_week_factors  = self._fetch_factors(prior_week_start, prior_week_end)
 
-        # ── 5. Compute regimes ───────────────────────────────
-        scored = compute_regimes(scored)
+        # ── 6. Compute scores for the full window ────────────
+        scored_full = compute_scores(factors_full)
 
-        # ── 6. Compute per-date rank ─────────────────────────
-        scored = compute_ranks(scored)
+        # Merge in already-saved scores (days before from_date in same week)
+        # so compute_weekly aggregates the complete week.
+        if not saved_week_scores.empty:
+            # saved_week_scores only has date/sector/total_score — we need
+            # to score those factor rows too so all columns are present.
+            # They are already included in factors_full (week_start → week_end),
+            # so scored_full already contains them.  Nothing extra to do.
+            pass
 
-        # ── 7. Build weekly rollup ───────────────────────────
-        weekly = compute_weekly(scored)
+        # ── 7. Compute scores for prior week (for delta_1w) ──
+        scored_prior = pd.DataFrame()
+        if not prior_week_factors.empty:
+            scored_prior = compute_scores(prior_week_factors)
+            # Deltas for prior week rows use their own history — use the
+            # same history lookback; minor inaccuracy acceptable here since
+            # we only need total_score for diff, not delta columns.
+            scored_prior = compute_deltas(scored_prior, history)
+            scored_prior = compute_regimes(scored_prior)
+            scored_prior = compute_ranks(scored_prior)
 
-        return scored, weekly
+        # ── 8. Compute score deltas for current window ───────
+        # Combine saved week scores + history for correct positional lag
+        combined_history = pd.concat(
+            [history, saved_week_scores], ignore_index=True
+        ).drop_duplicates(subset=["date", "sector_name"])
+
+        scored_full = compute_deltas(scored_full, combined_history)
+
+        # ── 9. Compute regimes & ranks ───────────────────────
+        scored_full = compute_regimes(scored_full)
+        scored_full = compute_ranks(scored_full)
+
+        # ── 10. Build weekly rollup over FULL window + prior week
+        #        so score_delta_1w can diff current vs prior week ──
+        all_for_weekly = pd.concat(
+            [scored_prior, scored_full], ignore_index=True
+        ).drop_duplicates(subset=["date", "sector_name"]) \
+         .sort_values(["sector_name", "date"]) \
+         .reset_index(drop=True)
+
+        weekly = compute_weekly(all_for_weekly)
+
+        # ── 11. Strip rows outside [from_date, to_date] ──────
+        #  Only save scores for the dates we were asked to compute.
+        from_date_ts = pd.Timestamp(from_date).date()
+        to_date_ts   = pd.Timestamp(to_date).date()
+
+        scored_out = scored_full[
+            (pd.to_datetime(scored_full["date"]).dt.date >= from_date_ts) &
+            (pd.to_datetime(scored_full["date"]).dt.date <= to_date_ts)
+        ].reset_index(drop=True)
+
+        return scored_out, weekly
 
     # ──────────────────────────────────────────────────────────
     # Public API
@@ -666,52 +735,6 @@ class SectorScoringService:
 
         logger.info(f"✅ Hoàn tất scoring: {total} sector-date rows")
         return total
-
-    def run_maintenance(self) -> int:
-        """
-        Maintenance mode — only score dates not yet in sector_score_daily.
-        Run daily after SectorAggregationService.run_maintenance().
-        """
-        last_raw = self._get_latest_score_date()
-        today = datetime.now().date()
-
-        # Chuẩn hóa kiểu dữ liệu cho last về datetime.date chuẩn
-        last = None
-        if last_raw:
-            if isinstance(last_raw, str):
-                last = datetime.strptime(last_raw.strip()[:10], "%Y-%m-%d").date()
-            elif isinstance(last_raw, datetime):
-                last = last_raw.date()
-            elif isinstance(last_raw, date_type):
-                last = last_raw
-
-        logger.info(f"🔍 DEBUG SCORING MAINTAIN: Ngày cuối cùng trong DB: {last} | Hôm nay: {today}")
-
-        if last and last >= today:
-            logger.info("✅ sector_score_daily đã cập nhật đến hôm nay")
-            return 0
-
-        from_date = (
-            (last + timedelta(days=1)).strftime("%Y-%m-%d")
-            if last else "2021-01-01"
-        )
-        to_date = today.strftime("%Y-%m-%d")
-
-        logger.info(f"🔄 Bảo trì scoring: {from_date} → {to_date}")
-        return self.run_range(from_date, to_date)
-
-    def run_all(self, from_date: str = "2021-01-01") -> int:
-        """
-        Full rebuild from from_date to today.
-        Run after SectorAggregationService.run_all().
-
-        Returns: total sector-date rows written.
-        """
-        to_date = datetime.now().date().strftime("%Y-%m-%d")
-        logger.info(
-            f"🚀 Full rebuild sector_score_daily: {from_date} → {to_date}"
-        )
-        return self.run_range(from_date, to_date, batch_days=90)
 
     def get_latest_ranking(self, date: Optional[str] = None, min_coverage: float = 0.3, min_stocks: int = 3) -> pd.DataFrame:
         """

@@ -38,7 +38,6 @@ from typing import Optional
 
 import pandas as pd
 from sqlalchemy import text
-from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
 from src.indicators.mf_indicators import calc_mf_indicators
@@ -64,7 +63,27 @@ class MFService(BaseSymbolService):
     """
 
     # Warmup: enough bars for MA20, EMA20, rolling STD20 to converge
+    _label = "MF Indicators"
+
+    # Warmup: enough bars for MA20, EMA20, rolling STD20 to converge
     MIN_HISTORY_DAYS = 60
+    _WARMUP_BUFFER = 40  # larger buffer than IndicatorService — MF uses more rolling ops
+
+    _PRICE_COLUMNS = (
+        "trading_date",
+        "open_price",
+        "highest_price",
+        "lowest_price",
+        "close_price",
+        "close_price_adjusted",
+        "total_match_vol",
+        "total_match_val",
+        "foreign_buy_vol_total",
+        "foreign_sell_vol_total",
+    )
+    # Pre-filter bad rows at DB level — avoids fetching rows that would be
+    # dropped later and prevents division-by-zero in adjust_prices()
+    _EXTRA_WHERE = "AND close_price > 0 AND close_price_adjusted IS NOT NULL"
 
     # DB output columns (must match stock_mf_daily schema)
     _OUTPUT_COLS = [
@@ -73,56 +92,6 @@ class MFService(BaseSymbolService):
         "nmf", "nmf_zscore", "nmf_accel", "nff_zscore",
         "trading_value",
     ]
-
-    # ──────────────────────────────────────────────────────────
-    # DB Helpers
-    # ──────────────────────────────────────────────────────────
-    def _fetch_prices(self, symbol: str, from_date: Optional[str] = None) -> pd.DataFrame:
-        """
-        Fetch daily_stock_prices for one symbol with warmup prepended.
-
-        Always loads MIN_HISTORY_DAYS extra bars before from_date so that
-        rolling windows converge — those warmup rows are stripped before saving.
-        """
-        params: dict = {"symbol": symbol}
-        date_clause = ""
-
-        if from_date:
-            warmup = (
-                datetime.strptime(from_date, "%Y-%m-%d")
-                - timedelta(days=self.MIN_HISTORY_DAYS + 40)
-            ).strftime("%Y-%m-%d")
-            date_clause = "AND trading_date >= :warmup"
-            params["warmup"] = warmup
-
-        query = text(f"""
-            SELECT
-                trading_date,
-                open_price,
-                highest_price,
-                lowest_price,
-                close_price,
-                close_price_adjusted,
-                total_match_vol,
-                total_match_val,
-                foreign_buy_vol_total,
-                foreign_sell_vol_total
-            FROM daily_stock_prices
-            WHERE symbol = :symbol
-              AND close_price > 0
-              AND close_price_adjusted IS NOT NULL
-              {date_clause}
-            ORDER BY trading_date ASC
-        """)
-
-        try:
-            with self.db.engine.connect() as conn:
-                df = pd.read_sql(query, conn, params=params)
-            df["trading_date"] = pd.to_datetime(df["trading_date"])
-            return df
-        except Exception as e:
-            logger.error(f"❌ Lỗi fetch giá {symbol}: {e}")
-            return pd.DataFrame()
 
     def _fetch_sector(self, symbol: str) -> Optional[str]:
         """Return sector_name for a symbol via stock_sector_mapping JOIN."""

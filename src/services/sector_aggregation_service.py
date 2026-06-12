@@ -66,6 +66,8 @@ from sqlalchemy import text
 from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
+from src.services.base_sector_service import BaseSectorService
+
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +144,7 @@ def _aggregate_group(group: pd.DataFrame) -> dict:
 # SectorAggregationService
 # ══════════════════════════════════════════════════════════════
 
-class SectorAggregationService:
+class SectorAggregationService(BaseSectorService):
 
     # Minimum stocks for a sector row to be considered meaningful
     # (still saved — caller / scoring layer decides to exclude)
@@ -164,9 +166,6 @@ class SectorAggregationService:
         "n_stocks",
         "coverage_pct",
     ]
-
-    def __init__(self, db_handler: DatabaseHandler):
-        self.db = db_handler
 
     # ──────────────────────────────────────────────────────────
     # DB Helpers
@@ -224,7 +223,7 @@ class SectorAggregationService:
             logger.error(f"❌ Lỗi fetch sector totals: {e}")
             return {}
 
-    def _get_latest_aggregation_date(self) -> Optional[date_type]:
+    def _get_latest_date(self) -> Optional[date_type]:
         """Latest date stored in sector_factor_daily."""
         query = text("SELECT MAX(date) FROM sector_factor_daily")
         try:
@@ -373,59 +372,6 @@ class SectorAggregationService:
 
         logger.info(f"✅ Hoàn tất aggregation: {total} sector-date rows")
         return total
-
-    def run_maintenance(self) -> int:
-        """
-        Maintenance mode — only aggregate dates not yet in sector_factor_daily.
-        Safe to run daily after MFService.run_maintenance() completes.
-        """
-        # 1. Lấy ngày cuối cùng từ DB dạng raw
-        last_raw = self._get_latest_aggregation_date()
-        today = datetime.now().date()
-
-        # 2. CHUẨN HÓA: Ép kiểu dữ liệu của last về datetime.date để không bị lỗi so sánh/cộng ngày
-        last = None
-        if last_raw:
-            if isinstance(last_raw, str):
-                # Nếu DB trả về chuỗi "YYYY-MM-DD"
-                last = datetime.strptime(last_raw.strip()[:10], "%Y-%m-%d").date()
-            elif isinstance(last_raw, datetime):
-                # Nếu DB trả về dạng datetime có cả giờ giấc
-                last = last_raw.date()
-            elif isinstance(last_raw, date):
-                # Nếu đã là date chuẩn sẵn rồi
-                last = last_raw
-
-        # Thêm log này để bạn kiểm tra trên màn hình terminal
-        logger.info(f"🔍 DEBUG MAINTAIN: Ngày cuối cùng trong DB là: {last} (Kiểu: {type(last)}) | Hôm nay là: {today}")
-
-        # 3. Kiểm tra nếu đã cập nhật đến hôm nay hoặc muộn hơn
-        if last and last >= today:
-            logger.info("✅ sector_factor_daily đã cập nhật đến hôm nay. Không cần chạy bảo trì.")
-            return 0
-
-        # 4. Tính toán khoảng ngày an toàn dưới dạng chuỗi YYYY-MM-DD
-        from_date = (
-            (last + timedelta(days=1)).strftime("%Y-%m-%d")
-            if last else "2021-01-01"
-        )
-        to_date = today.strftime("%Y-%m-%d")
-
-        logger.info(f"🔄 Bắt đầu tiến trình bảo trì: {from_date} → {to_date}")
-
-        # 5. Gọi hàm run_range đã hoạt động tốt của bạn
-        return self.run_range(from_date, to_date)
-
-    def run_all(self, from_date: str = "2021-01-01") -> int:
-        """
-        Full rebuild of sector_factor_daily from from_date to today.
-        Use for initial population or after re-running MFService.run_all().
-
-        Returns: total sector-date rows written.
-        """
-        to_date = datetime.now().date().strftime("%Y-%m-%d")
-        logger.info(f"🚀 Full rebuild sector_factor_daily: {from_date} → {to_date}")
-        return self.run_range(from_date, to_date, batch_days=30)
 
 
 # ══════════════════════════════════════════════════════════════
