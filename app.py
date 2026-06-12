@@ -12,13 +12,14 @@ from src.database.handler import DatabaseHandler
 from src.core.api_client import SSIAPIClient
 from src.core.transformer import DataTransformer
 from src.core.sync_service import SyncService
-from src.services.gap_service import GapRepairService
+from src.database.gap_service import GapRepairService
 from src.services.indicator_service import IndicatorService
 from src.services.signal_service import SignalService
 from src.services.mf_service import MFService
 from src.services.sector_aggregation_service import SectorAggregationService
 from src.services.sector_scoring_service import SectorScoringService
-from src.interfaces import page1, page2, page3, page4
+from src.services.index_service import IndexService
+from src.interfaces import page1, page2, page3, page4, page5
 from src.interfaces.helpers import setup_logging
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -57,9 +58,10 @@ def init_services():
     mf_svc      = MFService(db)
     agg_svc     = SectorAggregationService(db)
     scoring_svc = SectorScoringService(db)
-    return db, sync_svc, gap_svc, ind_svc, sig_svc, mf_svc, agg_svc, scoring_svc
+    index_svc = IndexService(db)
+    return db, sync_svc, gap_svc, ind_svc, sig_svc, mf_svc, agg_svc, scoring_svc, ind_svc
 
-db, sync_service, gap_service, indicator_svc, signal_svc, mf_svc, agg_svc, scoring_svc = init_services()
+db, sync_service, gap_service, indicator_svc, signal_svc, mf_svc, agg_svc, scoring_svc, ind_svc = init_services()
 
 # ── Symbol list ───────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -79,11 +81,12 @@ has_data   = not symbols_df.empty
 # ── Layout ────────────────────────────────────────────────────────────────────
 st.title("📈 DataQuant & Signal")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Data",
     "Chart",
     "Signals",
-    "🧮 Upcoming",
+    "Sector",
+    "Index",
 ])
 
 with tab1:
@@ -97,3 +100,6 @@ with tab3:
 
 with tab4:
     page4.render(db, scoring_svc)
+
+with tab5:
+    page5.render(db)

@@ -59,6 +59,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pandas as pd
+from sqlalchemy import text
 from tqdm import tqdm
 
 from src.database.handler import DatabaseHandler
@@ -76,6 +78,20 @@ class BaseSymbolService(ABC):
 
     # Override in subclass to customise log / tqdm labels
     _label: str = ""
+
+    MIN_HISTORY_DAYS: int = 60
+    _WARMUP_BUFFER: int = 30
+
+    _PRICE_COLUMNS: tuple[str, ...] = (
+        "trading_date",
+        "open_price",
+        "highest_price",
+        "lowest_price",
+        "close_price",
+        "close_price_adjusted",
+    )
+
+    _EXTRA_WHERE: str = ""  # e.g. "AND close_price > 0 AND close_price_adjusted IS NOT NULL"
 
     def __init__(self, db_handler: DatabaseHandler):
         self.db = db_handler
@@ -122,6 +138,62 @@ class BaseSymbolService(ABC):
         would be wasteful to repeat per symbol (e.g. loading sector maps).
         Default: no-op.
         """
+
+    def _fetch_prices(self, symbol: str, from_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Fetch daily_stock_prices for one symbol with warmup prepended.
+
+        The exact columns fetched and any extra WHERE filters are
+        controlled by subclass class-level constants:
+            _PRICE_COLUMNS  — columns to SELECT
+            _EXTRA_WHERE    — additional WHERE predicates
+            MIN_HISTORY_DAYS + _WARMUP_BUFFER — warmup window size
+
+        Always loads extra bars before from_date so that rolling windows
+        (MA, EMA, rolling STD) converge before the first saved row.
+        Warmup rows are NOT stripped here — the caller's _compute()
+        handles that via a from_date slice.
+
+        Args:
+            symbol    : ticker, e.g. 'SSI'
+            from_date : 'YYYY-MM-DD' — fetch from (warmup before) this date.
+                        None → fetch full history.
+
+        Returns:
+            DataFrame sorted ascending by trading_date, or empty DataFrame
+            on error.
+        """
+        params: dict = {"symbol": symbol}
+        date_clause: str = ""
+
+        if from_date:
+            warmup = (
+                    datetime.strptime(from_date, "%Y-%m-%d")
+                    - timedelta(days=self.MIN_HISTORY_DAYS + self._WARMUP_BUFFER)
+            ).strftime("%Y-%m-%d")
+            date_clause = "AND trading_date >= :warmup"
+            params["warmup"] = warmup
+
+        col_list = ",\n                ".join(self._PRICE_COLUMNS)
+
+        query = text(f"""
+            SELECT
+                {col_list}
+            FROM daily_stock_prices
+            WHERE symbol = :symbol
+              {self._EXTRA_WHERE}
+              {date_clause}
+            ORDER BY trading_date ASC
+        """)
+
+        try:
+            with self.db.engine.connect() as conn:
+                df = pd.read_sql(query, conn, params=params)
+            df["trading_date"] = pd.to_datetime(df["trading_date"])
+            return df
+        except Exception as e:
+            logger.error(f"❌ Lỗi fetch giá {symbol}: {e}")
+            return pd.DataFrame()
 
     # ── Shared orchestration ──────────────────────────────────────────────────
     def run_all(self, market: str = "HOSE", from_date: Optional[str] = None) -> int:

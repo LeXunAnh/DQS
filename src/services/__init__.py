@@ -1,5 +1,5 @@
 from src.core.sync_service import SyncService
-from .gap_service       import GapRepairService
+from src.database.gap_service import GapRepairService
 from .indicator_service import IndicatorService
 from .signal_service    import SignalService
 from .pnf_service       import PNFService
