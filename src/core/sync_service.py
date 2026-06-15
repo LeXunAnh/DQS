@@ -128,24 +128,66 @@ class SyncService:
 
         return True
 
-    def sync_securities(self, market: str = "HOSE") -> bool:
-        """Đồng bộ bảng securities"""
-        try:
-            res = self.api.get_securities(market, 1, 1000)
+    def sync_securities(self, market: str = "HOSE", page_size: int = 100, max_retries: int = 3) -> bool:
+        """
+        Đồng bộ bảng securities — paginate qua tất cả trang để không bỏ sót IPO mới.
 
-            def _save(data: list) -> bool:
-                if not data:
-                    logger.warning(f"Không có data securities cho {market}")
-                    return False
-                df = self.transformer.securities_to_df(data)
-                self.db.save_data(df, "securities", ["symbol"])
-                logger.info(f"✅ Đã đồng bộ securities cho {market}")
-                return True
+        SSI API trả về tối đa page_size records mỗi trang.
+        Dùng page_size nhỏ (100) và lặp đến khi trang trả về ít hơn page_size records
+        (tức là đã hết data).
+        """
+        self.db.deactivate_securities_by_market(market)
 
-            return self._handle_api_response(res, _save, context=f"securities {market}")
-        except Exception as e:
-            logger.exception(f"Lỗi trong sync_securities: {e}")
-            return False
+        page       = 1
+        total_rows = 0
+        while True:
+            context = f"securities {market} page={page}"
+            success = False
+
+            for attempt in range(max_retries):
+                try:
+                    res = self.api.get_securities(market, page, page_size)
+                    status      = res.get("status")
+                    status_code = res.get("statusCode")
+
+                    if status == "Success":
+                        data = res.get("data", [])
+                        if data:
+                            df = self.transformer.securities_to_df(data)
+                            self.db.save_data_for_securities(df, "securities", ["symbol"])
+                            total_rows += len(df)
+                            logger.info(
+                                f"  securities {market} trang {page}: "
+                                f"{len(df)} rows (tổng {total_rows})"
+                            )
+
+                        # Nếu trang trả về ít hơn page_size → đây là trang cuối
+                        if len(data) < page_size:
+                            logger.info(
+                                f"✅ Đã đồng bộ securities {market}: "
+                                f"{total_rows} rows tổng cộng ({page} trang)"
+                            )
+                            return True
+
+                        # Còn trang tiếp theo
+                        page   += 1
+                        success = True
+                        break
+
+                    # 401 / 429 → _handle_api_response handles sleep + token refresh
+                    self._handle_api_response(res, lambda d: True,
+                                              context=context, attempt=attempt)
+                    if status not in (401, 429) and status_code not in (401, 429):
+                        logger.error(f"❌ Hard API error [{context}]: {res.get('message') or res}")
+                        return False
+
+                except Exception as e:
+                    logger.exception(f"Lỗi sync_securities [{context}]: {e}")
+                    time.sleep(1)
+
+            if not success:
+                logger.error(f"❌ sync_securities thất bại sau {max_retries} lần thử: {context}")
+                return False
 
     def sync_all_markets(self):
         """Đồng bộ tất cả sàn"""

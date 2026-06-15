@@ -216,7 +216,14 @@ class MFService(BaseSymbolService):
 
         # Use pre-fetched map when available (batch runs), else fetch individually
         sector_map = getattr(self, "_sector_map", None)
-        sector = sector_map.get(symbol) if sector_map is not None else self._fetch_sector(symbol)
+
+        if sector_map is not None and symbol in sector_map:
+            # Nếu mã có trong bộ đệm nạp sẵn -> Lấy ra dùng ngay (Tối ưu tốc độ)
+            sector = sector_map[symbol]
+        else:
+            # Nếu bộ đệm không có mã này (Cache miss) hoặc chưa từng chạy Hook nạp bulk
+            # -> Ép hệ thống truy vấn đơn lẻ vào DB để lấy ngành chính xác, KHÔNG để bị NULL.
+            sector = self._fetch_sector(symbol)
 
         result = self._compute(symbol, raw, sector, from_date)
         if result.empty:
@@ -303,7 +310,7 @@ if __name__ == "__main__":
             row  = svc.run_single_date(sym, date)
             if row is not None:
                 print(f"\n── MF Indicators {sym} @ {date} ──")
-                cols = ["mfi", "cmf", "rvol", "nmf", "nmf_zscore", "nmf_accel", "nff_zscore"]
+                cols = ["sector_name","mfi", "cmf", "rvol", "nmf", "nmf_zscore", "nmf_accel", "nff_zscore"]
                 for c in cols:
                     print(f"  {c:15s}: {row.get(c)}")
             else:

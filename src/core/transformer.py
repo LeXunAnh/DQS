@@ -13,7 +13,9 @@ class DataTransformer:
             'symbol': df['Symbol'],
             'market': df['Market'],
             'stock_name': df['StockName'],
-            'stock_en_name': df['StockEnName']
+            'stock_en_name': df['StockEnName'],
+            'sector_name': None,
+            'is_active': True,
         })
 
     @staticmethod

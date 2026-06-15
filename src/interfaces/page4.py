@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sqlalchemy import text
 from src.database.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
@@ -111,27 +112,183 @@ def _cell_style(col: str):
 # ── Data loaders ───────────────────────────────────────────────────────────────
 
 def _load_daily_ranking(scoring_svc, date_str, min_stocks: int) -> pd.DataFrame:
-    return scoring_svc.get_latest_ranking(date=date_str, min_coverage=0.0, min_stocks=min_stocks)
+    return scoring_svc.get_latest_ranking(
+        date=date_str, min_coverage=0.0, min_stocks=min_stocks,
+    )
 
 @st.cache_data(ttl=300)
 def _load_score_history(_db, from_date: str, to_date: str, sectors: tuple[str, ...]) -> pd.DataFrame:
-    return _db.fetch_sector_score_history(from_date, to_date, list(sectors))
+    return DatabaseHandler.fetch_sector_score_history(_db, from_date, to_date, list(sectors))
 
 @st.cache_data(ttl=300)
 def _load_heatmap_data(_db, from_date: str, to_date: str) -> pd.DataFrame:
-    return _db.fetch_sector_heatmap(from_date, to_date)
+    return DatabaseHandler.fetch_sector_heatmap(_db, from_date, to_date)
 
 @st.cache_data(ttl=300)
 def _load_sector_detail(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
-    return _db.fetch_sector_detail(sector, from_date, to_date)
+    return DatabaseHandler.fetch_sector_detail(_db, sector, from_date, to_date)
 
 @st.cache_data(ttl=300)
 def _load_symbol_matrix(_db, sector: str, date_str: str) -> pd.DataFrame:
-    return _db.fetch_symbol_matrix(sector, date_str)
+    return DatabaseHandler.fetch_symbol_matrix(_db, sector, date_str)
 
 @st.cache_data(ttl=300)
 def _load_symbol_history(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
-    return _db.fetch_symbol_history(sector, from_date, to_date)
+    return DatabaseHandler.fetch_symbol_history(_db, sector, from_date, to_date)
+
+@st.cache_data(ttl=300)
+def _load_sector_ohlc(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
+    return DatabaseHandler.load_sector_ohlc(_db, sector, from_date, to_date)
+
+
+# ── Sector candle chart helpers ─────────────────────────────────────────────────
+
+def _base100(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise OHLC so the first close = 100."""
+    df = df.copy()
+    if df.empty:
+        return df
+    base = df["close"].dropna().iloc[0]
+    if base == 0:
+        return df
+    for c in ["open", "high", "low", "close"]:
+        if c in df.columns:
+            df[c] = (df[c] / base * 100).round(4)
+    return df
+
+
+def _candle_series_data(df: pd.DataFrame) -> list[dict]:
+    return [
+        {
+            "time":  row["trading_date"].strftime("%Y-%m-%d"),
+            "open":  round(float(row["open"]),  4),
+            "high":  round(float(row["high"]),  4),
+            "low":   round(float(row["low"]),   4),
+            "close": round(float(row["close"]), 4),
+        }
+        for _, row in df.iterrows()
+        if not any(pd.isna([row["open"], row["high"], row["low"], row["close"]]))
+    ]
+
+
+def _vol_series_data(df: pd.DataFrame) -> list[dict]:
+    out, prev = [], None
+    for _, row in df.iterrows():
+        close = row.get("close")
+        color = (
+            "rgba(38,166,154,0.5)"
+            if prev is None or (not pd.isna(close) and close >= prev)
+            else "rgba(239,83,80,0.5)"
+        )
+        if not pd.isna(row.get("volume", float("nan"))):
+            out.append({
+                "time":  row["trading_date"].strftime("%Y-%m-%d"),
+                "value": float(row["volume"]),
+                "color": color,
+            })
+        prev = close if not pd.isna(close) else prev
+    return out
+
+
+def _score_series_data(score_df: pd.DataFrame) -> list[dict]:
+    return [
+        {"time": row["date"].strftime("%Y-%m-%d"), "value": round(float(row["total_score"]), 4)}
+        for _, row in score_df.iterrows()
+        if not pd.isna(row["total_score"])
+    ]
+
+
+def _render_sector_candle_chart(
+    price_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    normalise: bool,
+    show_score: bool,
+    key: str,
+) -> None:
+    """Render 2-pane (+ optional score pane) lightweight candle chart for a sector."""
+    from streamlit_lightweight_charts import renderLightweightCharts
+
+    if price_df.empty:
+        st.info("Không có dữ liệu giá tổng hợp cho ngành này.")
+        return
+
+    df = _base100(price_df) if normalise else price_df.copy()
+    bg   = {"type": "solid", "color": "#ffffff"}
+    grid = {"vertLines": {"color": "#f0f0f0"}, "horzLines": {"color": "#f0f0f0"}}
+
+    charts = [
+        {
+            "chart": {
+                "height": 360,
+                "layout": {"background": bg, "textColor": "#333"},
+                "grid": grid,
+                "crosshair": {"mode": 1},
+                "timeScale": {"borderColor": "#d1d5db", "rightOffset": 8},
+                "rightPriceScale": {"borderColor": "#d1d5db"},
+            },
+            "series": [{
+                "type": "Candlestick",
+                "data": _candle_series_data(df),
+                "options": {
+                    "upColor":         "#26a69a",
+                    "downColor":       "#ef5350",
+                    "borderUpColor":   "#26a69a",
+                    "borderDownColor": "#ef5350",
+                    "wickUpColor":     "#26a69a",
+                    "wickDownColor":   "#ef5350",
+                    "priceFormat": {"type": "price", "precision": 2, "minMove": 0.01},
+                },
+            }],
+        },
+        {
+            "chart": {
+                "height": 80,
+                "layout": {"background": bg, "textColor": "#333"},
+                "grid": grid,
+                "timeScale": {"borderColor": "#d1d5db", "visible": False},
+                "rightPriceScale": {
+                    "borderColor": "#d1d5db",
+                    "scaleMargins": {"top": 0.05, "bottom": 0},
+                },
+            },
+            "series": [{
+                "type": "Histogram",
+                "data": _vol_series_data(df),
+                "options": {"priceFormat": {"type": "volume"}, "priceScaleId": ""},
+            }],
+        },
+    ]
+
+    if show_score and not score_df.empty:
+        sd = _score_series_data(score_df)
+        if sd:
+            charts.append({
+                "chart": {
+                    "height": 70,
+                    "layout": {"background": bg, "textColor": "#333"},
+                    "grid": grid,
+                    "timeScale": {"borderColor": "#d1d5db", "visible": False},
+                    "rightPriceScale": {
+                        "borderColor": "#d1d5db",
+                        "scaleMargins": {"top": 0.1, "bottom": 0.1},
+                    },
+                },
+                "series": [{
+                    "type": "Line",
+                    "data": sd,
+                    "options": {
+                        "color": "#8b5cf6",
+                        "lineWidth": 2,
+                        "priceLineVisible": False,
+                        "lastValueVisible": True,
+                        "title": "MF Score",
+                        "priceFormat": {"type": "price", "precision": 3, "minMove": 0.001},
+                    },
+                }],
+            })
+
+    renderLightweightCharts(charts, key=key)
+
 
 
 # ── Sub-renderers ──────────────────────────────────────────────────────────────
@@ -180,7 +337,7 @@ def _render_ranking_table(df: pd.DataFrame) -> None:
                     ("Δ1D",_delta_style),("Δ5D",_delta_style)]:
         if col in disp.columns:
             styled = styled.map(fn, subset=[col])
-    st.dataframe(styled, use_container_width=True, height=440)
+    st.dataframe(styled, width='stretch', height=440)
 
 
 def _render_regime_heatmap(df: pd.DataFrame, n_days: int = 20) -> None:
@@ -195,7 +352,7 @@ def _render_regime_heatmap(df: pd.DataFrame, n_days: int = 20) -> None:
     )
     pivot.columns = [str(c) for c in pivot.columns]
     styled = pivot.style.map(_score_color).format("{:+.2f}", na_rep="—")
-    st.dataframe(styled, use_container_width=True, height=400)
+    st.dataframe(styled, width='stretch', height=400)
 
 
 def _render_trend_chart(history_df: pd.DataFrame,
@@ -210,7 +367,7 @@ def _render_trend_chart(history_df: pd.DataFrame,
     if selected_sectors:
         cols = [c for c in selected_sectors if c in pivot.columns]
         pivot = pivot[cols]
-    st.line_chart(pivot, use_container_width=True, height=280)
+    st.line_chart(pivot, width='stretch', height=280)
 
 
 def _render_weekly_table(scoring_svc, year_week) -> None:
@@ -233,7 +390,7 @@ def _render_weekly_table(scoring_svc, year_week) -> None:
                     ("Δ1W",_delta_style)]:
         if col in disp.columns:
             styled = styled.map(fn, subset=[col])
-    st.dataframe(styled, use_container_width=True, height=380)
+    st.dataframe(styled, width='stretch', height=380)
 
 def _pct_change_style(val: float) -> str:
     """Color for per_price_change column: green=up, red=down, neutral=flat."""
@@ -328,7 +485,7 @@ def _render_symbol_matrix_single(db, sector: str, date_str: str) -> None:
 
     n = len(disp)
     height = min(40 * n + 40, 800)
-    st.dataframe(styled, use_container_width=True, height=height)
+    st.dataframe(styled, width='stretch', height=height)
 
     st.caption(
         f"**{n} cổ phiếu** &nbsp;|&nbsp; "
@@ -385,7 +542,7 @@ def _render_symbol_matrix_multi(db, sector: str,
 
     n = len(pivot)
     height = min(40 * n + 40, 800)
-    st.dataframe(styled, use_container_width=True, height=height)
+    st.dataframe(styled, width='stretch', height=height)
     st.caption(
         f"**{n} cổ phiếu × {len(pivot.columns)} ngày** | "
         "Sắp xếp theo giá trị giao dịch trung bình (lớn nhất ở trên)"
@@ -395,18 +552,106 @@ def _render_symbol_matrix_multi(db, sector: str,
 def _render_sector_drilldown(db, sector: str,
                              from_date: str, to_date: str) -> None:
     """
-    Drill-down for one sector — 4 tabs:
-      1. Symbol Matrix (latest date)     ← NEW: pure st.dataframe matrix
-      2. Symbol Matrix (multi-date)      ← NEW: pivot rows=symbol, cols=date
-      3. Sector Indicators (time-series)
-      4. Breadth Participation
+    Drill-down for one sector — 5 tabs:
+      1. 🕯️ Candle Chart  — synthetic OHLC candlestick (liquidity-weighted)
+      2. 📋 Symbol Matrix  — latest date, all stocks
+      3. 📆 Multi-date Matrix — pivot rows=symbol, cols=date
+      4. 📈 Indicators    — sector-level factor time-series
+      5. 🧩 Breadth       — breadth participation %
     """
-    tab_matrix, tab_multi, tab_ind, tab_breadth = st.tabs([
+    tab_candle, tab_matrix, tab_multi, tab_ind, tab_breadth = st.tabs([
+        "🕯️ Candle Chart",
         "📋 Symbol Matrix",
         "📆 Multi-date Matrix",
         "📈 Indicators",
         "🧩 Breadth",
     ])
+
+    # ── Tab 0: Candle Chart — synthetic OHLC ─────────────────────────────────
+    with tab_candle:
+        st.caption(
+            "OHLC tổng hợp = bình quân **gia quyền giá trị giao dịch** (total_match_val) "
+            "của tất cả cổ phiếu trong ngành · Giá đã điều chỉnh (adjusted)."
+        )
+
+        cc1, cc2, cc3 = st.columns([1, 1, 1])
+        with cc1:
+            normalise = st.checkbox(
+                "Base-100 (so sánh tương đối)",
+                value=True,
+                key=f"sc_norm_{sector}",
+                help="Chia tất cả giá theo giá đóng cửa đầu tiên × 100",
+            )
+        with cc2:
+            show_score = st.checkbox(
+                "Hiện MF Score pane",
+                value=True,
+                key=f"sc_score_{sector}",
+            )
+        with cc3:
+            pass  # reserved
+
+        # Load data
+        price_df = _load_sector_ohlc(db, sector, from_date, to_date)
+        score_df = _load_sector_detail(db, sector, from_date, to_date)
+
+        # Metric cards
+        if not price_df.empty:
+            disp_df = _base100(price_df) if normalise else price_df
+            last    = disp_df.iloc[-1]
+            prev    = disp_df.iloc[-2] if len(disp_df) > 1 else last
+            close   = float(last["close"])
+            pclose  = float(prev["close"])
+            chg     = close - pclose
+            chg_pct = chg / pclose * 100 if pclose else 0
+
+            regime_val = score_val = "—"
+            if not score_df.empty and "regime" in score_df.columns:
+                ls = score_df.iloc[-1]
+                regime_val = ls.get("regime") or "—"
+                sv = ls.get("total_score")
+                score_val = f"{sv:+.3f}" if sv is not None and not pd.isna(sv) else "—"
+
+            lbl = "Base-100" if normalise else "Giá adj"
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric(f"Đóng ({lbl})", f"{close:,.2f}", f"{chg:+.2f} ({chg_pct:+.1f}%)")
+            m2.metric("Cao nhất",      f"{float(last['high']):,.2f}")
+            m3.metric("Thấp nhất",     f"{float(last['low']):,.2f}")
+            m4.metric("KL (cổ phiếu)", f"{float(last['volume'])/1e6:.2f}M")
+            m5.metric("MF Score",      score_val)
+            m6.metric("Chế độ",        regime_val)
+
+        # Build score overlay DataFrame (date + total_score columns)
+        score_overlay = pd.DataFrame()
+        if show_score and not score_df.empty and "total_score" in score_df.columns:
+            score_overlay = score_df[["date", "total_score"]].dropna(subset=["total_score"]).copy()
+
+        _render_sector_candle_chart(
+            price_df   = price_df,
+            score_df   = score_overlay,
+            normalise  = normalise,
+            show_score = show_score,
+            key        = f"sc_candle_{sector}_{from_date}_{normalise}_{show_score}",
+        )
+
+        # Performance stats
+        if not price_df.empty:
+            close_s = price_df["close"]
+            pct_chg = close_s.pct_change().dropna()
+            n       = len(price_df)
+            with st.expander("📊 Thống kê hiệu suất"):
+                sa, sb, sc, sd = st.columns(4)
+                sa.metric("Số phiên",           n)
+                sb.metric("Biến động ngày (TB)", f"{pct_chg.mean()*100:+.3f}%")
+                sc.metric("Ngày tăng mạnh nhất", f"{pct_chg.max()*100:+.2f}%")
+                sd.metric("Ngày giảm mạnh nhất", f"{pct_chg.min()*100:+.2f}%")
+                r_cols = st.columns(4)
+                for i, (label, periods) in enumerate([
+                    ("5 phiên", 5), ("20 phiên", 20), ("60 phiên", 60), ("120 phiên", 120)
+                ]):
+                    if n > periods:
+                        r = (close_s.iloc[-1] / close_s.iloc[-periods] - 1) * 100
+                        r_cols[i].metric(f"Return {label}", f"{r:+.2f}%")
 
     # ── Tab 1: Symbol Matrix — single date ────────────────────────────────────
     with tab_matrix:
@@ -444,23 +689,23 @@ def _render_sector_drilldown(db, sector: str,
             with c_left:
                 st.markdown("**CMF (Weighted vs Median)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_cmf","median_cmf"]],
-                              height=180, use_container_width=True)
+                              height=180, width='stretch')
                 st.markdown("**MFI (Weighted vs Median)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_mfi","median_mfi"]],
-                              height=180, use_container_width=True)
+                              height=180, width='stretch')
                 st.markdown("**RVOL (Weighted)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_rvol"]],
-                              height=160, use_container_width=True)
+                              height=160, width='stretch')
             with c_right:
                 st.markdown("**NMF Z-Score (Weighted)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_nmf_z"]],
-                              height=180, use_container_width=True)
+                              height=180, width='stretch')
                 st.markdown("**NMF Acceleration (Weighted)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_accel"]],
-                              height=180, use_container_width=True)
+                              height=180, width='stretch')
                 st.markdown("**NFF Z-Score (Net Foreign Flow)**")
                 st.line_chart(detail_df.set_index("date")[["weighted_nff_z"]],
-                              height=160, use_container_width=True)
+                              height=160, width='stretch')
 
     # ── Tab 4: Breadth participation ───────────────────────────────────────────
     with tab_breadth:
@@ -480,11 +725,11 @@ def _render_sector_drilldown(db, sector: str,
                     "breadth_nff_positive":  "NFF>0",
                 })
                 st.markdown("**Breadth Participation (% stocks meeting threshold)**")
-                st.line_chart(b_df, height=240, use_container_width=True)
+                st.line_chart(b_df, height=240, width='stretch')
             if "n_stocks" in detail_df.columns and "coverage_pct" in detail_df.columns:
                 st.markdown("**Số cổ phiếu & Coverage**")
                 st.line_chart(detail_df.set_index("date")[["n_stocks","coverage_pct"]],
-                              height=160, use_container_width=True)
+                              height=160, width='stretch')
 
 
 # ── Main render ────────────────────────────────────────────────────────────────

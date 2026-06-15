@@ -1,6 +1,17 @@
 # src/interfaces/page1.py
 # ─────────────────────────────────────────────────────────────────────────────
 # Tab 1 — Data Management: Sync · Indicators · Signals · Sector Pipeline
+#
+# OOP Structure
+# ─────────────────────────────────────────────────────────────────────────────
+# Page1                          ← orchestrator, injected with all services
+#   ├── _DbBadge                 ← DB connection status badge
+#   ├── SyncSection              ← Raw Data Sync column
+#   ├── IndicatorSection         ← Technical Indicators column
+#   ├── SignalSection            ← Trading Signals column
+#   ├── IndexDataSection         ← Index Data column
+#   ├── SectorPipelineSection    ← MF · Aggregation · Scoring + Full Sync
+#   └── SystemLogSection         ← Collapsible log expander
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -9,10 +20,9 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-# ── Shared CSS injected once ──────────────────────────────────────────────────
+# ── Shared CSS ────────────────────────────────────────────────────────────────
 _CSS = """
 <style>
-/* Section header strip */
 .pg1-section-header {
     display: flex;
     align-items: center;
@@ -27,8 +37,6 @@ _CSS = """
     color: #1e2942;
     letter-spacing: 0.3px;
 }
-
-/* DB badge */
 .pg1-db-badge {
     display: inline-flex;
     align-items: center;
@@ -47,16 +55,6 @@ _CSS = """
     border-radius: 50%;
     display: inline-block;
 }
-
-/* Compact card for pipeline steps */
-.pg1-card {
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    padding: 12px 14px;
-}
-
-/* Slim divider */
 .pg1-divider {
     border: none;
     border-top: 1px solid #e9ecef;
@@ -66,7 +64,9 @@ _CSS = """
 """
 
 
-def _section(icon: str, title: str) -> None:
+# ── Shared UI helpers ─────────────────────────────────────────────────────────
+
+def _section_header(icon: str, title: str) -> None:
     st.markdown(
         f'<div class="pg1-section-header">{icon}&nbsp; {title}</div>',
         unsafe_allow_html=True,
@@ -77,412 +77,536 @@ def _divider() -> None:
     st.markdown('<hr class="pg1-divider">', unsafe_allow_html=True)
 
 
-# ── Main render ───────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: DB Badge
+# ══════════════════════════════════════════════════════════════════════════════
 
-def render(
-        db, sync_service, gap_service,
-        indicator_svc, signal_svc,
-        mf_svc=None, agg_svc=None, scoring_svc=None,
-) -> None:
-    st.markdown(_CSS, unsafe_allow_html=True)
+class _DbBadge:
+    """Renders the DB connection badge (host / database name)."""
 
-    # ── DB connection badge ───────────────────────────────────────────────────
-    host = db.engine.url.host or "localhost"
-    dbname = db.engine.url.database or "—"
-    st.markdown(
-        f'<div class="pg1-db-badge">'
-        f'<span class="dot"></span>'
-        f'{host} &nbsp;/&nbsp; {dbname}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    def __init__(self, db) -> None:
+        self._db = db
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    def render(self) -> None:
+        host   = self._db.engine.url.host or "localhost"
+        dbname = self._db.engine.url.database or "—"
+        st.markdown(
+            f'<div class="pg1-db-badge">'
+            f'<span class="dot"></span>'
+            f'{host} &nbsp;/&nbsp; {dbname}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # SECTION 1 — RAW DATA SYNC
-    # ═════════════════════════════════════════════════════════════════════════
-    _section("📡", "Raw Data Sync")
 
-    sync_options = {
-        "Securities list (all markets)": "sec",
-        "Single symbol — OHLC": "ohlc_one",
-        "All symbols — OHLC": "ohlc_all",
-        "Single symbol — detailed price": "price_one",
-        "All symbols — detailed price": "price_all",
-        "Maintenance (fill missing days)": "maint",
-        "Repair data gaps": "gaps",
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: Raw Data Sync
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SyncSection:
+    """Column 1 — Raw Data Sync tasks."""
+
+    _TASK_OPTIONS: dict[str, str] = {
+        "Securities list":         "sec",
+        "Single symbol — OHLC":    "ohlc_one",
+        "All symbols — OHLC":      "ohlc_all",
+        "Single — detailed price": "price_one",
+        "All — detailed price":    "price_all",
+        "Maintenance":             "maint",
+        "Repair gaps":             "gaps",
     }
 
-    col_task, col_mkt = st.columns([3, 1])
-    with col_task:
-        task_label = st.selectbox(
-            "Task", list(sync_options.keys()), key="s1_task", label_visibility="collapsed"
-        )
-    task_key = sync_options[task_label]
+    def __init__(self, sync_service, gap_service) -> None:
+        self._sync = sync_service
+        self._gap  = gap_service
 
-    maint_markets = ["HOSE", "HNX", "HOSE + HNX"]
-    std_markets = ["HOSE", "HNX", "HOSE + HNX"]
+    def render(self) -> None:
+        st.markdown("**📡 Raw Data Sync**")
 
-    with col_mkt:
-        market_opts = maint_markets if task_key == "maint" else std_markets
-        t1_market = st.selectbox("Market", market_opts, key="s1_mkt", label_visibility="collapsed")
+        task_label = st.selectbox("Task", list(self._TASK_OPTIONS), index=5, key="s1_task")
+        task_key   = self._TASK_OPTIONS[task_label]
+        market     = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="s1_mkt")
 
-    # Context inputs row
-    needs_symbol = task_key in ("ohlc_one", "price_one")
-    needs_dates = task_key in ("ohlc_one", "ohlc_all", "price_one", "price_all")
-    needs_mode = task_key == "maint"
+        needs_symbol = task_key in ("ohlc_one", "price_one")
+        needs_dates  = task_key in ("ohlc_one", "ohlc_all", "price_one", "price_all")
 
-    ctx_cols = st.columns(4)
-    t1_symbol = "SSI"
-    t1_from = datetime(2021, 1, 1).date()
-    t1_to = (datetime.now() - timedelta(days=1)).date()
-    t1_mode = "price"
+        symbol  = st.text_input("Symbol", value="SSI", key="s1_sym") if needs_symbol else "SSI"
+        from_dt = st.date_input("From", value=datetime(2021, 1, 1), key="s1_from") if needs_dates else datetime(2021, 1, 1).date()
+        to_dt   = st.date_input("To", value=datetime.now() - timedelta(days=1), key="s1_to") if needs_dates else (datetime.now() - timedelta(days=1)).date()
 
-    if needs_symbol:
-        with ctx_cols[0]:
-            t1_symbol = st.text_input("Symbol", value="SSI", key="s1_sym")
-    if needs_dates:
-        with ctx_cols[1]:
-            t1_from = st.date_input("From", value=datetime(2021, 1, 1), key="s1_from")
-        with ctx_cols[2]:
-            t1_to = st.date_input("To", value=datetime.now() - timedelta(days=1), key="s1_to")
-    if needs_mode:
-        with ctx_cols[0]:
-            t1_mode = st.selectbox("Data type", ["price"], key="s1_mode")
+        if st.button("▶ Run Sync", type="primary", use_container_width=True, key="s1_run"):
+            st.session_state.log_messages = []
+            with st.status(f"{task_label}…", expanded=False) as status:
+                try:
+                    self._execute(task_key, market, symbol, from_dt, to_dt)
+                    status.update(label="✅ Done", state="complete", expanded=False)
+                    st.cache_data.clear()
+                except Exception as e:
+                    logging.exception(e)
+                    status.update(label=f"❌ {e}", state="error")
 
-    if st.button("▶ Run Sync", type="primary", key="s1_run"):
-        st.session_state.log_messages = []
-        with st.status(f"Running: {task_label}…", expanded=True) as status:
-            try:
-                f = t1_from.strftime("%d/%m/%Y")
-                t = t1_to.strftime("%d/%m/%Y")
-                s = t1_symbol.strip().upper()
+    def _execute(self, task: str, market: str, symbol: str, from_dt, to_dt) -> None:
+        f = from_dt.strftime("%d/%m/%Y")
+        t = to_dt.strftime("%d/%m/%Y")
+        s = symbol.strip().upper()
+        markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
 
-                markets = ["HOSE", "HNX"] if t1_market == "HOSE + HNX" else [t1_market]
+        match task:
+            case "sec":
+                self._sync.sync_all_markets()
+            case "ohlc_one":
+                self._sync.sync_one_ohlc(s, f, t)
+            case "ohlc_all":
+                for mkt in markets:
+                    st.write(f"⏳ OHLC — {mkt}…")
+                    self._sync.sync_all_ohlc(mkt, f, t)
+            case "price_one":
+                self._sync.sync_one_stock_price(s, f, t)
+            case "price_all":
+                for mkt in markets:
+                    st.write(f"⏳ Prices — {mkt}…")
+                    self._sync.sync_all_stock_prices(mkt, f)
+            case "maint":
+                for mkt in markets:
+                    st.write(f"⏳ Maintenance — {mkt}…")
+                    self._sync.maintenance_sync(mkt, "price")
+            case "gaps":
+                for mkt in markets:
+                    st.write(f"⏳ Gap repair — {mkt}…")
+                    self._gap.repair_all_gaps(mkt)
 
-                match task_key:
-                    case "sec":
-                        sync_service.sync_all_markets()
-                    case "ohlc_one":
-                        sync_service.sync_one_ohlc(s, f, t)
-                    case "ohlc_all":
-                        for mkt in markets:
-                            st.write(f"⏳ OHLC — {mkt}…")
-                            sync_service.sync_all_ohlc(mkt, f, t)
-                    case "price_one":
-                        sync_service.sync_one_stock_price(s, f, t)
-                    case "price_all":
-                        for mkt in markets:
-                            st.write(f"⏳ Prices — {mkt}…")
-                            sync_service.sync_all_stock_prices(mkt, f)
-                    case "maint":
-                        for mkt in markets:
-                            st.write(f"⏳ Maintenance — {mkt}…")
-                            sync_service.maintenance_sync(mkt, t1_mode)
-                    case "gaps":
-                        for mkt in markets:
-                            st.write(f"⏳ Gap repair — {mkt}…")
-                            gap_service.repair_all_gaps(mkt)
 
-                status.update(label="✅ Done", state="complete", expanded=False)
-                st.cache_data.clear()
-            except Exception as e:
-                logging.exception(e)
-                status.update(label=f"❌ Error: {e}", state="error")
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: Technical Indicators
+# ══════════════════════════════════════════════════════════════════════════════
 
-    _divider()
+class IndicatorSection:
+    """Column 2 — Technical Indicator computation."""
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # SECTION 2 — INDICATORS & SIGNALS  (side by side)
-    # ═════════════════════════════════════════════════════════════════════════
-    _section("🧮", "Indicators & Signals")
+    def __init__(self, indicator_svc) -> None:
+        self._svc = indicator_svc
 
-    ind_col, sig_col = st.columns(2, gap="large")
+    def render(self) -> None:
+        st.markdown("**🧮 Indicators**")
 
-    # ── Indicators ────────────────────────────────────────────────────────────
-    with ind_col:
-        st.markdown("**Technical Indicators**")
-        i_mode = st.radio(
-            "Mode", ["Maintenance", "Single symbol", "Full market"],
-            horizontal=True, key="i_mode",
-        )
-        r1, r2 = st.columns(2)
-        with r1:
-            i_mkt = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], key="i_mkt")
-        with r2:
-            i_sym = (
-                st.text_input("Symbol", value="SSI", key="i_sym")
-                if i_mode == "Single symbol" else ""
-            )
-        i_date = (
-            st.date_input("From date (blank = all history)", value=None, key="i_date")
-            if i_mode != "Maintenance" else None
-        )
+        mode      = st.radio("Mode", ["Maintenance", "Single symbol", "Full market"],
+                             horizontal=False, key="i_mode")
+        market    = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="i_mkt")
+        symbol    = st.text_input("Symbol", value="SSI", key="i_sym") if mode == "Single symbol" else ""
+        from_date = st.date_input("From date", value=None, key="i_date") if mode != "Maintenance" else None
 
-        if st.button("▶ Compute Indicators", use_container_width=True, key="btn_ind"):
-            with st.status("Computing…") as s:
-                fd = i_date.strftime("%Y-%m-%d") if i_date else None
-                i_markets = ["HOSE", "HNX"] if i_mkt == "HOSE + HNX" else [i_mkt]
-                match i_mode:
+        if st.button("▶ Compute", use_container_width=True, key="btn_ind"):
+            with st.status("Computing…") as status:
+                fd      = from_date.strftime("%Y-%m-%d") if from_date else None
+                markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
+                match mode:
                     case "Maintenance":
-                        for mkt in i_markets:
-                            indicator_svc.run_maintenance(mkt)
+                        for mkt in markets:
+                            self._svc.run_maintenance(mkt)
                     case "Single symbol":
-                        indicator_svc.run_one(i_sym.strip().upper(), fd)
+                        self._svc.run_one(symbol.strip().upper(), fd)
                     case "Full market":
-                        for mkt in i_markets:
-                            indicator_svc.run_all(mkt, fd)
-                s.update(label="✅ Done", state="complete")
+                        for mkt in markets:
+                            self._svc.run_all(mkt, fd)
+                status.update(label="✅ Done", state="complete")
 
-    # ── Signals ───────────────────────────────────────────────────────────────
-    with sig_col:
-        st.markdown("**Trading Signals**")
-        s_mode = st.radio(
-            "Mode", ["Maintenance", "Single symbol", "Full market"],
-            horizontal=True, key="s_mode",
-        )
-        r1, r2 = st.columns(2)
-        with r1:
-            s_mkt = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], key="s_mkt")
-        with r2:
-            s_sym = (
-                st.text_input("Symbol", value="SSI", key="s_sym")
-                if s_mode == "Single symbol" else ""
-            )
-        s_date = (
-            st.date_input("From date (blank = all history)", value=None, key="s_date")
-            if s_mode != "Maintenance" else None
-        )
 
-        if st.button("▶ Detect Signals", use_container_width=True, key="btn_sig"):
-            with st.status("Scanning…") as s:
-                fd = s_date.strftime("%Y-%m-%d") if s_date else None
-                s_markets = ["HOSE", "HNX"] if s_mkt == "HOSE + HNX" else [s_mkt]
-                match s_mode:
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: Trading Signals
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SignalSection:
+    """Column 3 — Signal detection."""
+
+    def __init__(self, signal_svc) -> None:
+        self._svc = signal_svc
+
+    def render(self) -> None:
+        st.markdown("**🔔 Signals**")
+
+        mode      = st.radio("Mode", ["Maintenance", "Single symbol", "Full market"],
+                             horizontal=False, key="s_mode")
+        market    = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="s_mkt")
+        symbol    = st.text_input("Symbol", value="SSI", key="s_sym") if mode == "Single symbol" else ""
+        from_date = st.date_input("From date", value=None, key="s_date") if mode != "Maintenance" else None
+
+        if st.button("▶ Detect", use_container_width=True, key="btn_sig"):
+            with st.status("Scanning…") as status:
+                fd      = from_date.strftime("%Y-%m-%d") if from_date else None
+                markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
+                match mode:
                     case "Maintenance":
-                        for mkt in s_markets:
-                            signal_svc.run_maintenance(mkt)
+                        for mkt in markets:
+                            self._svc.run_maintenance(mkt)
                     case "Single symbol":
-                        signal_svc.run_one(s_sym.strip().upper(), fd)
+                        self._svc.run_one(symbol.strip().upper(), fd)
                     case "Full market":
-                        for mkt in s_markets:
-                            signal_svc.run_all(mkt, fd)
-                s.update(label="✅ Done", state="complete")
+                        for mkt in markets:
+                            self._svc.run_all(mkt, fd)
+                status.update(label="✅ Done", state="complete")
 
-    _divider()
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # SECTION 3 — INDEX DATA
-    # ═════════════════════════════════════════════════════════════════════════
-    _section("📊", "Index Data")
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: Index Data
+# ══════════════════════════════════════════════════════════════════════════════
 
-    idx_list_col, idx_daily_col = st.columns(2, gap="large")
+class IndexDataSection:
+    """Column 4 — Index list sync + daily history."""
 
-    with idx_list_col:
-        st.markdown("**Index List**")
-        il_mkt = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], key="il_mkt")
+    def __init__(self, sync_service) -> None:
+        self._sync = sync_service
+
+    def render(self) -> None:
+        st.markdown("**📊 Index Data**")
+        self._render_list_sync()
+        st.markdown("**Daily History**")
+        self._render_daily_sync()
+
+    def _render_list_sync(self) -> None:
+        market = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="il_mkt")
         c1, c2 = st.columns(2)
-
         with c1:
-            if st.button("Sync selected", use_container_width=True, key="btn_il_one"):
-                with st.status(f"Syncing {il_mkt} index list…") as s:
-                    il_markets = ["HOSE", "HNX"] if il_mkt == "HOSE + HNX" else [il_mkt]
-                    ok = all(sync_service.fetch_index_list(m) for m in il_markets)
-                    if ok:
-                        s.update(label="✅ Done", state="complete")
-                    else:
-                        s.update(label="❌ Failed", state="error")
-
+            if st.button("Sync list", use_container_width=True, key="btn_il_one"):
+                with st.spinner("Syncing…"):
+                    markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
+                    ok = all(self._sync.fetch_index_list(m) for m in markets)
+                    st.success("Done") if ok else st.error("Failed")
         with c2:
-            if st.button("Sync all markets", use_container_width=True, key="btn_il_all"):
-                with st.status("Syncing all markets…") as s:
-                    ok = sync_service.sync_index_lists()
-                    if ok:
-                        s.update(label="✅ Done", state="complete")
-                    else:
-                        s.update(label="⚠️ Partial failure", state="error")
+            if st.button("Sync all", use_container_width=True, key="btn_il_all"):
+                with st.spinner("Syncing…"):
+                    ok = self._sync.sync_index_lists()
+                    st.success("Done") if ok else st.warning("Partial")
 
-    with idx_daily_col:
-        st.markdown("**Daily Index History**")
-        id_mkt = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], key="id_mkt")
-        id_maint = st.checkbox("Maintenance mode (fill missing only)", value=True, key="id_maint")
-        id_from = "01/01/2022" if id_maint else st.text_input(
-            "From date (dd/mm/yyyy)", value="01/01/2022", key="id_from"
+    def _render_daily_sync(self) -> None:
+        market         = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="id_mkt")
+        mode           = st.radio("Mode", ["Maintenance", "Full sync"], horizontal=True, key="id_mode")
+        is_maintenance = mode == "Maintenance"
+        from_date      = "01/01/2022" if is_maintenance else st.text_input(
+            "From (dd/mm/yyyy)", value="01/01/2022", key="id_from"
         )
 
         if st.button("▶ Sync Daily Index", type="primary", use_container_width=True, key="btn_id"):
-            with st.status(f"Syncing daily index — {id_mkt}…") as s:
+            with st.spinner("Syncing…"):
                 try:
-                    id_markets = ["HOSE", "HNX"] if id_mkt == "HOSE + HNX" else [id_mkt]
-                    for mkt in id_markets:
-                        sync_service.sync_all_daily_index(
+                    markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
+                    for mkt in markets:
+                        self._sync.sync_all_daily_index(
                             market=mkt,
-                            from_date=id_from,
-                            maintenance_mode=id_maint,
+                            from_date=from_date,
+                            maintenance_mode=is_maintenance,
                         )
-                    s.update(label="✅ Done", state="complete")
+                    st.success("Done")
                 except Exception as e:
-                    s.update(label=f"❌ Error: {e}", state="error")
+                    st.error(f"Error: {e}")
 
-    _divider()
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # SECTION 4 — SECTOR ROTATION PIPELINE
-    # ═════════════════════════════════════════════════════════════════════════
-    _section("🔄", "Sector Rotation Pipeline")
+# ══════════════════════════════════════════════════════════════════════════════
+# Sector Pipeline — three sub-sections
+# ══════════════════════════════════════════════════════════════════════════════
 
-    if mf_svc is None or agg_svc is None or scoring_svc is None:
-        st.info("Sector services not initialised.")
-    else:
+class _MFSubSection:
+    """Money Flow Indicators column inside the sector pipeline."""
+
+    def __init__(self, mf_svc) -> None:
+        self.svc = mf_svc
+
+    def render(self) -> None:
+        st.markdown("**Money Flow Indicators**")
+        mode      = st.radio("Mode", ["Maintenance", "Single symbol", "Full market"],
+                             horizontal=False, key="mf_mode")
+        market    = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], index=2, key="mf_mkt")
+        symbol    = st.text_input("Symbol", value="SSI", key="mf_sym") if mode == "Single symbol" else ""
+        from_date = st.date_input("From date", value=None, key="mf_date") if mode != "Maintenance" else None
+
+        if st.button("▶ Run MF", use_container_width=True, key="btn_mf"):
+            with st.status("Computing MF…") as status:
+                fd      = from_date.strftime("%Y-%m-%d") if from_date else None
+                markets = ["HOSE", "HNX"] if market == "HOSE + HNX" else [market]
+                match mode:
+                    case "Maintenance":
+                        for mkt in markets:
+                            self.svc.run_maintenance(mkt)
+                    case "Single symbol":
+                        self.svc.run_one(symbol.strip().upper(), fd)
+                    case "Full market":
+                        for mkt in markets:
+                            self.svc.run_all(mkt, fd)
+                status.update(label="✅ Done", state="complete")
+
+
+class _AggregationSubSection:
+    """Sector Aggregation column."""
+
+    def __init__(self, agg_svc) -> None:
+        self.svc = agg_svc
+
+    def render(self) -> None:
+        st.markdown("**Sector Aggregation**")
+        mode = st.radio("Mode", ["Maintenance", "Single date", "Date range", "Full rebuild"],
+                        horizontal=False, key="agg_mode")
+
+        agg_date = agg_from = agg_to = None
+        match mode:
+            case "Single date":
+                agg_date = st.date_input("Date", key="agg_date")
+            case "Date range":
+                agg_from = st.date_input("From", value=datetime(2024, 1, 1), key="agg_from")
+                agg_to   = st.date_input("To", key="agg_to")
+            case "Full rebuild":
+                agg_from = st.date_input("From", value=datetime(2021, 1, 1), key="agg_rebuild_from")
+
+        if st.button("▶ Run Aggregation", use_container_width=True, key="btn_agg"):
+            with st.status("Aggregating…") as status:
+                match mode:
+                    case "Maintenance":
+                        n = self.svc.run_maintenance()
+                    case "Single date":
+                        n = self.svc.run_date(agg_date.strftime("%Y-%m-%d"))
+                    case "Date range":
+                        n = self.svc.run_range(agg_from.strftime("%Y-%m-%d"), agg_to.strftime("%Y-%m-%d"))
+                    case "Full rebuild":
+                        n = self.svc.run_all(agg_from.strftime("%Y-%m-%d"))
+                status.update(label=f"✅ {n} sector-date rows", state="complete")
+
+
+class _ScoringSubSection:
+    """Sector Scoring column."""
+
+    def __init__(self, scoring_svc) -> None:
+        self.svc = scoring_svc
+
+    def render(self) -> None:
+        st.markdown("**Sector Scoring**")
+        mode = st.radio("Mode", ["Maintenance", "Single date", "Date range", "Full rebuild"],
+                        horizontal=False, key="sc_mode")
+
+        sc_date = sc_from = sc_to = None
+        match mode:
+            case "Single date":
+                sc_date = st.date_input("Date", key="sc_date")
+            case "Date range":
+                sc_from = st.date_input("From", value=datetime(2024, 1, 1), key="sc_from")
+                sc_to   = st.date_input("To", key="sc_to")
+            case "Full rebuild":
+                sc_from = st.date_input("From", value=datetime(2021, 1, 1), key="sc_rebuild_from")
+
+        if st.button("▶ Run Scoring", use_container_width=True, key="btn_sc"):
+            with st.status("Scoring…") as status:
+                match mode:
+                    case "Maintenance":
+                        n = self.svc.run_maintenance()
+                    case "Single date":
+                        n = self.svc.run_date(sc_date.strftime("%Y-%m-%d"))
+                    case "Date range":
+                        n = self.svc.run_range(sc_from.strftime("%Y-%m-%d"), sc_to.strftime("%Y-%m-%d"))
+                    case "Full rebuild":
+                        n = self.svc.run_all(sc_from.strftime("%Y-%m-%d"))
+                status.update(label=f"✅ {n} sector rows", state="complete")
+
+
+class SectorPipelineSection:
+    """
+    Full Sector Rotation pipeline section:
+      MF Indicators | Aggregation | Scoring  +  Full Sync button
+    """
+
+    def __init__(self, sync_service, indicator_svc, signal_svc, mf_svc, agg_svc, scoring_svc) -> None:
+        self._sync    = sync_service
+        self._ind     = indicator_svc
+        self._sig     = signal_svc
+        self._mf      = _MFSubSection(mf_svc)
+        self._agg     = _AggregationSubSection(agg_svc)
+        self._scoring = _ScoringSubSection(scoring_svc)
+
+    def render(self) -> None:
+        _section_header("🔄", "Sector Rotation Pipeline")
+
         mf_col, agg_col, sc_col = st.columns(3, gap="large")
-
-        # ── MF Indicators ─────────────────────────────────────────────────────
         with mf_col:
-            st.markdown("**Money Flow Indicators**")
-            mf_mode = st.radio(
-                "Mode", ["Maintenance", "Single symbol", "Full market"],
-                horizontal=False, key="mf_mode",
-            )
-            mf_mkt = st.selectbox("Market", ["HOSE", "HNX"], key="mf_mkt")
-            mf_sym = (
-                st.text_input("Symbol", value="SSI", key="mf_sym")
-                if mf_mode == "Single symbol" else ""
-            )
-            mf_date = (
-                st.date_input("From date", value=None, key="mf_date")
-                if mf_mode != "Maintenance" else None
-            )
-            if st.button("▶ Run MF", use_container_width=True, key="btn_mf"):
-                with st.status("Computing MF…") as s:
-                    fd = mf_date.strftime("%Y-%m-%d") if mf_date else None
-                    mf_markets = ["HOSE", "HNX"] if mf_mkt == "HOSE + HNX" else [mf_mkt]
-                    match mf_mode:
-                        case "Maintenance":
-                            for mkt in mf_markets:
-                                mf_svc.run_maintenance(mkt)
-                        case "Single symbol":
-                            mf_svc.run_one(mf_sym.strip().upper(), fd)
-                        case "Full market":
-                            for mkt in mf_markets:
-                                mf_svc.run_all(mkt, fd)
-                    s.update(label="✅ Done", state="complete")
-
-        # ── Sector Aggregation ────────────────────────────────────────────────
+            self._mf.render()
         with agg_col:
-            st.markdown("**Sector Aggregation**")
-            agg_mode = st.radio(
-                "Mode",
-                ["Maintenance", "Single date", "Date range", "Full rebuild"],
-                horizontal=False, key="agg_mode",
-            )
-            agg_date = agg_from = agg_to = None
-            match agg_mode:
-                case "Single date":
-                    agg_date = st.date_input("Date", key="agg_date")
-                case "Date range":
-                    agg_from = st.date_input("From", value=datetime(2024, 1, 1), key="agg_from")
-                    agg_to = st.date_input("To", key="agg_to")
-                case "Full rebuild":
-                    agg_from = st.date_input("From", value=datetime(2021, 1, 1), key="agg_rebuild_from")
-
-            if st.button("▶ Run Aggregation", use_container_width=True, key="btn_agg"):
-                with st.status("Aggregating…") as s:
-                    match agg_mode:
-                        case "Maintenance":
-                            n = agg_svc.run_maintenance()
-                        case "Single date":
-                            n = agg_svc.run_date(agg_date.strftime("%Y-%m-%d"))
-                        case "Date range":
-                            n = agg_svc.run_range(
-                                agg_from.strftime("%Y-%m-%d"),
-                                agg_to.strftime("%Y-%m-%d"),
-                            )
-                        case "Full rebuild":
-                            n = agg_svc.run_all(agg_from.strftime("%Y-%m-%d"))
-                    s.update(label=f"✅ {n} sector-date rows", state="complete")
-
-        # ── Sector Scoring ────────────────────────────────────────────────────
+            self._agg.render()
         with sc_col:
-            st.markdown("**Sector Scoring**")
-            sc_mode = st.radio(
-                "Mode",
-                ["Maintenance", "Single date", "Date range", "Full rebuild"],
-                horizontal=False, key="sc_mode",
-            )
-            sc_date = sc_from = sc_to = None
-            match sc_mode:
-                case "Single date":
-                    sc_date = st.date_input("Date", key="sc_date")
-                case "Date range":
-                    sc_from = st.date_input("From", value=datetime(2024, 1, 1), key="sc_from")
-                    sc_to = st.date_input("To", key="sc_to")
-                case "Full rebuild":
-                    sc_from = st.date_input("From", value=datetime(2021, 1, 1), key="sc_rebuild_from")
+            self._scoring.render()
 
-            if st.button("▶ Run Scoring", use_container_width=True, key="btn_sc"):
-                with st.status("Scoring…") as s:
-                    match sc_mode:
-                        case "Maintenance":
-                            n = scoring_svc.run_maintenance()
-                        case "Single date":
-                            n = scoring_svc.run_date(sc_date.strftime("%Y-%m-%d"))
-                        case "Date range":
-                            n = scoring_svc.run_range(
-                                sc_from.strftime("%Y-%m-%d"),
-                                sc_to.strftime("%Y-%m-%d"),
-                            )
-                        case "Full rebuild":
-                            n = scoring_svc.run_all(sc_from.strftime("%Y-%m-%d"))
-                    s.update(label=f"✅ {n} sector rows", state="complete")
-
-        # ── One-click pipeline ────────────────────────────────────────────────
         _divider()
-        pipe_col, info_col = st.columns([2, 3])
-        with pipe_col:
-            st.markdown("**⚡ Full Pipeline — Maintenance**")
-            p_mkt = st.selectbox("Market", ["HOSE", "HNX", "HOSE + HNX"], key="pipe_mkt")
-            if st.button(
-                    "🚀 Run Full Pipeline",
-                    type="primary",
-                    use_container_width=True,
-                    key="btn_pipeline",
-            ):
-                st.session_state.log_messages = []
-                with st.status("Running full pipeline…", expanded=True) as status:
-                    try:
-                        st.write("1/3 · Money Flow Indicators")
-                        p_markets = ["HOSE", "HNX"] if p_mkt == "HOSE + HNX" else [p_mkt]
-                        for mkt in p_markets:
-                            mf_svc.run_maintenance(mkt)
-                        st.write("2/3 · Sector Aggregation")
-                        agg_svc.run_maintenance()
-                        st.write("3/3 · Sector Scoring")
-                        scoring_svc.run_maintenance()
-                        status.update(label="✅ Pipeline complete", state="complete", expanded=False)
-                        st.cache_data.clear()
-                    except Exception as e:
-                        logging.exception(e)
-                        status.update(label=f"❌ {e}", state="error")
+        self._render_full_sync()
+
+    def _render_full_sync(self) -> None:
+        fs_col, info_col = st.columns([2, 3])
+
+        with fs_col:
+            st.markdown(
+                "**🚀 Full Sync** "
+                "<span style='font-size:11px;color:#6b7280;font-weight:400'>"
+                "(HOSE + HNX · Maintenance)</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button("🚀 Run Full Sync", type="primary",
+                         use_container_width=True, key="btn_pipeline"):
+                self._run_full_sync()
 
         with info_col:
             st.markdown(
-                """
-                **Execution order**  
-                `MF Indicators` → `Sector Aggregation` → `Sector Scoring`  
-
-                Maintenance mode only processes dates not yet in the DB —  
-                safe to run daily after market close.
-                """,
-                unsafe_allow_html=False,
+                "**Execution order** (Maintenance mode — missing dates only)\n\n"
+                "`1` Raw Data Sync → `2` Indicators → `3` Signals → "
+                "`4` Daily Index → `5` MF Indicators → `6` Sector Aggregation → `7` Sector Scoring"
             )
 
-    _divider()
+    def _run_full_sync(self) -> None:
+        st.session_state.log_messages = []
+        with st.status("Running Full Sync…", expanded=False) as status:
+            try:
+                markets = ["HOSE", "HNX"]
 
-    # ── System logs ───────────────────────────────────────────────────────────
-    with st.expander("🖥 System logs", expanded=False):
-        logs = st.session_state.get("log_messages", [])
-        if logs:
-            st.code("\n".join(logs), language="text")
+                status.update(label="1/7 · Raw Data Sync…")
+                for mkt in markets:
+                    self._sync.maintenance_sync(mkt, "price")
+
+                status.update(label="2/7 · Indicators…")
+                for mkt in markets:
+                    self._ind.run_maintenance(mkt)
+
+                status.update(label="3/7 · Signals…")
+                for mkt in markets:
+                    self._sig.run_maintenance(mkt)
+
+                status.update(label="4/7 · Daily Index History…")
+                for mkt in markets:
+                    self._sync.sync_all_daily_index(
+                        market=mkt,
+                        from_date="01/01/2022",
+                        maintenance_mode=True,
+                    )
+
+                status.update(label="5/7 · Money Flow Indicators…")
+                for mkt in markets:
+                    self._mf.svc.run_maintenance(mkt)
+
+                status.update(label="6/7 · Sector Aggregation…")
+                self._agg.svc.run_maintenance()
+
+                status.update(label="7/7 · Sector Scoring…")
+                self._scoring.svc.run_maintenance()
+
+                status.update(label="✅ Full Sync complete", state="complete")
+                st.cache_data.clear()
+            except Exception as e:
+                logging.exception(e)
+                status.update(label=f"❌ {e}", state="error")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Section: System Logs
+# ══════════════════════════════════════════════════════════════════════════════
+class SystemLogSection:
+    """Collapsible expander showing session log messages."""
+
+    def render(self) -> None:
+        _divider()
+        with st.expander("🖥 System logs", expanded=False):
+            logs = st.session_state.get("log_messages", [])
+            if logs:
+                st.code("\n".join(logs), language="text")
+            else:
+                st.caption("No logs yet.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Page1 — Top-level orchestrator
+# ══════════════════════════════════════════════════════════════════════════════
+class Page1:
+    """
+    Orchestrates all sections of Tab 1 — Data Management.
+
+    Usage (from app entry-point):
+        page = Page1(
+            db=db,
+            sync_service=sync_svc,
+            gap_service=gap_svc,
+            indicator_svc=indicator_svc,
+            signal_svc=signal_svc,
+            mf_svc=mf_svc,
+            agg_svc=agg_svc,
+            scoring_svc=scoring_svc,
+        )
+        page.render()
+    """
+
+    def __init__(
+        self,
+        db,
+        sync_service,
+        gap_service,
+        indicator_svc,
+        signal_svc,
+        mf_svc=None,
+        agg_svc=None,
+        scoring_svc=None,
+    ) -> None:
+        self._badge          = _DbBadge(db)
+        self._sync_section   = SyncSection(sync_service, gap_service)
+        self._ind_section    = IndicatorSection(indicator_svc)
+        self._sig_section    = SignalSection(signal_svc)
+        self._index_section  = IndexDataSection(sync_service)
+        self._log_section    = SystemLogSection()
+
+        self._has_sector = all(s is not None for s in (mf_svc, agg_svc, scoring_svc))
+        if self._has_sector:
+            self._sector_section = SectorPipelineSection(
+                sync_service, indicator_svc, signal_svc,
+                mf_svc, agg_svc, scoring_svc,
+            )
+
+    def render(self) -> None:
+        st.markdown(_CSS, unsafe_allow_html=True)
+
+        self._badge.render()
+
+        # ── Row 1: four operation columns ─────────────────────────────────────
+        _section_header("⚙️", "Data Operations")
+        col_sync, col_ind, col_sig, col_idx = st.columns(4, gap="medium")
+
+        with col_sync:
+            self._sync_section.render()
+        with col_ind:
+            self._ind_section.render()
+        with col_sig:
+            self._sig_section.render()
+        with col_idx:
+            self._index_section.render()
+
+        # ── Row 2: Sector pipeline ─────────────────────────────────────────────
+        if self._has_sector:
+            self._sector_section.render()
         else:
-            st.caption("No logs yet.")
+            _section_header("🔄", "Sector Rotation Pipeline")
+            st.info("Sector services not initialised.")
+
+        # ── System logs ────────────────────────────────────────────────────────
+        self._log_section.render()
+
+
+# ── Backward-compatible module-level entry point ──────────────────────────────
+def render(
+    db,
+    sync_service,
+    gap_service,
+    indicator_svc,
+    signal_svc,
+    mf_svc=None,
+    agg_svc=None,
+    scoring_svc=None,
+) -> None:
+    """Backward-compatible shim — delegates to Page1."""
+    Page1(
+        db=db,
+        sync_service=sync_service,
+        gap_service=gap_service,
+        indicator_svc=indicator_svc,
+        signal_svc=signal_svc,
+        mf_svc=mf_svc,
+        agg_svc=agg_svc,
+        scoring_svc=scoring_svc,
+    ).render()
