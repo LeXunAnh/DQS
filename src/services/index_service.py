@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 _EXCLUDED_CODES: frozenset[str] = frozenset({
     "VNSMALLCAP", "VNXALLSHARE", "VN50 GROWTH", "VNALLSHARE",
-    "VNDIVIDEND", "VNMIDCAP", "VNMITECH", "VNSHINE",
+    "VNDIVIDEND", "VNMIDCAP", "VNMITECH", "VNSHINE","HNXUpcomIndex"
 })
 
 class IndexService:
@@ -273,7 +273,7 @@ class IndexService:
             else:
                 logger.debug(f"  Bỏ qua {code} — không có dữ liệu")
 
-        logger.info(
+        logger.debug(
             f"✅ Loaded {len(result)}/{len(codes)} indices "
             f"(market={market or 'ALL'}, {n_days}d)"
         )

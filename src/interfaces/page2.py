@@ -1,6 +1,6 @@
 # src/interfaces/page2.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Tab 2 — Biểu đồ giá (TradingView lightweight) + Point & Figure
+# Tab 2 — Biểu đồ giá (TradingView lightweight) + Chỉ số hiệu suất nhanh
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -9,9 +9,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
-from matplotlib import pyplot as plt
 
-from src.services.pnf_service import PNFService
 from src.database.handler import DatabaseHandler
 from src.interfaces.helpers import (
     ALL_SIGNAL_TYPES,
@@ -27,8 +25,8 @@ _PERIOD_DAYS: dict[str, int] = {
     "1 tháng": 30,
     "3 tháng": 90,
     "6 tháng": 180,
-    "1 năm"  : 365,
-    "2 năm"  : 730,
+    "1 năm": 365,
+    "2 năm": 730,
     "Toàn bộ": 3650,
 }
 
@@ -41,12 +39,12 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         return
 
     # ── Controls ──────────────────────────────────────────────────────────────
-    c1, c2, c3, c4, c5 = st.columns([0.80, 1, 0.6, 1.3, 1.7])
+    c1, c2, c3, c4 = st.columns([1.0, 1.2, 1.0, 1.8])
 
     with c1:
-        sym_list   = symbols_df["symbol"].tolist()
+        sym_list = symbols_df["symbol"].tolist()
         default_ix = sym_list.index("SSI") if "SSI" in sym_list else 0
-        t2_symbol  = st.selectbox("Mã chứng khoán", sym_list, index=default_ix, key="t2_sym")
+        t2_symbol = st.selectbox("Mã chứng khoán", sym_list, index=default_ix, key="t2_sym")
 
     with c2:
         t2_chart_type = st.selectbox(
@@ -62,41 +60,20 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         )
 
     with c4:
-        t2_mas = st.multiselect(
-            "Đường MA overlay",
-            list(MA_PERIODS.keys()),
-            default=["MA20", "MA50"],
-            key="t2_mas",
-        )
-
-    with c5:
         t2_sig_filter = st.multiselect(
             "Hiển thị tín hiệu",
             ALL_SIGNAL_TYPES,
-            default=["MA_GOLDEN_CROSS"],
+            default=[],
             key="t2_sig_filter",
         )
 
-    # ── PnF settings ──────────────────────────────────────────────────────────
-    st.markdown("P&F Settings")
-    cA, cB, cC, cD = st.columns(4)
-
-    with cA:
-        pnf_method   = st.selectbox("Method", ["h/l", "ohlc", "l/h", "hlc", "cl"], key="pnf_method")
-    with cB:
-        pnf_reversal = st.number_input("Reversal", 1, 5, 3, key="pnf_rev")
-    with cC:
-        pnf_scaling  = st.selectbox("Scaling", ["log", "abs", "cla", "atr"], key="pnf_scaling")
-    with cD:
-        pnf_boxsize  = st.number_input("Boxsize", value=2.0, key="pnf_bs")
-
-    pnf_show_bo = st.checkbox("Breakouts",  True)
-    pnf_show_tl = st.checkbox("Trendlines", False)
-
     # ── Date range ────────────────────────────────────────────────────────────
-    today      = datetime.now().date()
+    today = datetime.now().date()
     start_date = today - timedelta(days=_PERIOD_DAYS[t2_period])
     t2_show_sig = len(t2_sig_filter) > 0
+
+    # Tự động hiển thị toàn bộ các đường MA Overlay được cấu hình sẵn
+    t2_mas = [ma for ma in MA_PERIODS.keys() if ma not in ["MA5", "MA10"]]
 
     # ── Fetch & process ───────────────────────────────────────────────────────
     raw_df = db.fetch_price_with_warmup(t2_symbol, start_date, today)
@@ -105,7 +82,7 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         st.warning(f"Không có dữ liệu giá cho {t2_symbol}.")
         return
 
-    raw_adj  = compute_adj_prices(raw_df)
+    raw_adj = compute_adj_prices(raw_df)
     price_df = raw_adj[raw_adj["trading_date"] >= start_date].reset_index(drop=True)
 
     ind_df = db.fetch_indicator_data(t2_symbol, start_date, today)
@@ -118,13 +95,65 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         st.warning("Không đủ dữ liệu sau khi filter theo ngày.")
         return
 
-    # ── Metric cards ──────────────────────────────────────────────────────────
+    # ── Fetch latest MFI / CMF from stock_mf_daily ───────────────────────────
+    mfi_val = cmf_val = None
+    try:
+        from sqlalchemy import text as _sql_text
+        with db.engine.connect() as _conn:
+            _mf_row = _conn.execute(
+                _sql_text("""
+                    SELECT mfi, cmf
+                    FROM stock_mf_daily
+                    WHERE symbol = :sym
+                    ORDER BY date DESC
+                    LIMIT 1
+                """),
+                {"sym": t2_symbol},
+            ).fetchone()
+        if _mf_row:
+            mfi_val = float(_mf_row[0]) if _mf_row[0] is not None else None
+            cmf_val = float(_mf_row[1]) if _mf_row[1] is not None else None
+    except Exception:
+        pass
+
+    # ── Metric Calculations ───────────────────────────────────────────────────
     last = price_df.iloc[-1]
     prev = price_df.iloc[-2] if len(price_df) > 1 else last
-    chg      = float(last["adj_close"]) - float(prev["adj_close"])
-    chg_pct  = chg / float(prev["adj_close"]) * 100 if prev["adj_close"] else 0
+    chg = float(last["adj_close"]) - float(prev["adj_close"])
+    chg_pct = chg / float(prev["adj_close"]) * 100 if prev["adj_close"] else 0
 
-    info_row   = symbols_df[symbols_df["symbol"] == t2_symbol]
+    # Tính toán các chỉ số Trung bình (TB) 1 tuần ~ 5 ngày giao dịch gần nhất
+    price_df["ma5_close"] = price_df["adj_close"].rolling(window=5, min_periods=1).mean()
+    price_df["ma5_vol"] = price_df["total_match_vol"].rolling(window=5, min_periods=1).mean()
+    price_df["net_foreign"] = price_df["foreign_buy_vol_total"] - price_df["foreign_sell_vol_total"]
+    price_df["ma5_foreign"] = price_df["net_foreign"].rolling(window=5, min_periods=1).mean()
+    price_df["val_ma20"] = price_df["total_match_val"].rolling(window=20, min_periods=1).mean()
+
+    if len(price_df) >= 6:
+        # So sánh MA5 phiên hiện tại với MA5 của 5 phiên giao dịch trước đó
+        curr_ma_close = price_df["ma5_close"].iloc[-1]
+        prev_ma_close = price_df["ma5_close"].iloc[-6]
+        price_avg_chg = ((curr_ma_close - prev_ma_close) / prev_ma_close * 100) if prev_ma_close else 0.0
+
+        curr_ma_vol = price_df["ma5_vol"].iloc[-1]
+        prev_ma_vol = price_df["ma5_vol"].iloc[-6]
+        vol_avg_chg = ((curr_ma_vol - prev_ma_vol) / prev_ma_vol * 100) if prev_ma_vol else 0.0
+
+        curr_ma_fgn = price_df["ma5_foreign"].iloc[-1]
+        prev_ma_fgn = price_df["ma5_foreign"].iloc[-6]
+        fgn_avg_chg = ((curr_ma_fgn - prev_ma_fgn) / abs(prev_ma_fgn) * 100) if prev_ma_fgn else 0.0
+    else:
+        price_avg_chg, vol_avg_chg, fgn_avg_chg = 0.0, 0.0, 0.0
+
+    # Tính toán tỷ lệ thanh khoản so với khối lượng trung bình 20 phiên (vol_ma20)
+    val_ma20_last = price_df["val_ma20"].iloc[-1] if not price_df.empty else np.nan
+    if pd.notna(val_ma20_last) and val_ma20_last > 0:
+        liquidity_ratio = last["total_match_val"] / val_ma20_last
+    else:
+        liquidity_ratio = np.nan
+
+    # Tiêu đề & Thông tin Mã chứng khoán
+    info_row = symbols_df[symbols_df["symbol"] == t2_symbol]
     stock_name = info_row["stock_name"].values[0] if not info_row.empty else t2_symbol
 
     st.markdown(
@@ -132,14 +161,6 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         f"<span style='font-size:14px;color:#6b7280'>{stock_name}</span>",
         unsafe_allow_html=True,
     )
-
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("Đóng cửa",        f"{last['adj_close']:,.0f}",  f"{chg:+.2f} ({chg_pct:+.0f}%)")
-    m2.metric("Cao nhất",        f"{last['adj_high']:,.0f}")
-    m3.metric("Thấp nhất",       f"{last['adj_low']:,.0f}")
-    m4.metric("Khối lượng",      f"{last['total_match_vol']/1e6:.2f}M")
-    m5.metric("Khối ngoại mua",  f"{last['foreign_buy_vol_total']/1e6:.2f}M")
-    m6.metric("Khối ngoại bán",  f"{last['foreign_sell_vol_total']/1e6:.2f}M")
 
     # ── Build overlays & markers ──────────────────────────────────────────────
     ma_series = build_ma_series(raw_adj, t2_mas, start_date) if t2_mas else []
@@ -152,8 +173,8 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
 
     markers = build_markers(sig_df) if not sig_df.empty else []
 
-    # ── Layout: Chart (left) + PnF (right) ───────────────────────────────────
-    col_left, col_right = st.columns([3, 2])
+    # ── Layout: Chart (Left) + Metric Cards Grid (Right) ──────────────────────
+    col_left, col_right = st.columns([5, 4])
 
     with col_left:
         chart_key = (
@@ -162,12 +183,13 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
         )
         render_price_chart(price_df, ma_series, markers, t2_chart_type, chart_key)
 
+        # Hiển thị nhãn giá trị các đường MA phía dưới biểu đồ
         if t2_mas:
             parts = []
             for ma in t2_mas:
-                n    = MA_PERIODS[ma]
+                n = MA_PERIODS[ma]
                 vals = raw_adj["adj_close"].rolling(n, min_periods=n).mean().dropna()
-                v    = f"{vals.iloc[-1]:,.2f}" if not vals.empty else "—"
+                v = f"{vals.iloc[-1]:,.2f}" if not vals.empty else "—"
                 parts.append(
                     f"<span style='background:{MA_COLORS[ma]};color:#fff;"
                     f"padding:2px 9px;border-radius:10px;"
@@ -176,42 +198,29 @@ def render(db, symbols_df: pd.DataFrame, has_data: bool) -> None:
             st.markdown(" ".join(parts), unsafe_allow_html=True)
 
     with col_right:
-        with st.spinner("Đang tính toán P&F..."):
-            try:
-                pnf_svc = PNFService(db)
-                chart   = pnf_svc.build_chart(
-                    t2_symbol,
-                    method  = pnf_method,
-                    reversal= pnf_reversal,
-                    boxsize = pnf_boxsize,
-                    scaling = pnf_scaling,
-                )
-                fig = PNFService.get_plot(
-                    chart,
-                    show_breakouts  = pnf_show_bo,
-                    show_trendlines = pnf_show_tl,
-                )
-                st.pyplot(fig)
-                plt.close(fig)
-            except Exception as e:
-                st.error(f"Lỗi P&F: {e}")
+        st.markdown("<div style='padding-top: 10px;'></div>", unsafe_allow_html=True)
 
-    # ── Signals table ─────────────────────────────────────────────────────────
-    st.markdown("Signals")
-    col_signal1, _ = st.columns(2)
+        # Hàng 1: Đóng cửa | Cao nhất | Thấp nhất
+        r1_c1, r1_c2, r1_c3 = st.columns(3)
+        r1_c1.metric("Đóng cửa", f"{last['adj_close']:,.0f}", f"{chg:+.2f} ({chg_pct:+.2f}%)")
+        r1_c2.metric("Cao nhất", f"{last['adj_high']:,.0f}")
+        r1_c3.metric("Thấp nhất", f"{last['adj_low']:,.0f}")
 
-    with col_signal1:
-        if t2_show_sig and not sig_df.empty:
-            st.markdown(f"#### Có {len(sig_df)} tín hiệu")
-            t_disp = sig_df[
-                ["signal_date", "signal_type", "signal_direction", "strength", "close_price"]
-            ].copy()
-            t_disp.columns = ["Ngày", "Loại tín hiệu", "Chiều", "Strength", "Giá"]
-            t_disp = t_disp.sort_values("Ngày", ascending=False).reset_index(drop=True)
-            st.dataframe(
-                t_disp.style.format({"Strength": "{:.2%}", "Giá": "{:,.2f}"}),
-                use_container_width=True,
-                height=320,
-            )
-        elif t2_show_sig:
-            st.info("Không có tín hiệu nào trong kỳ.")
+        # Hàng 2: Khối lượng | Khối ngoại mua | Khối ngoại bán
+        r2_c1, r2_c2, r2_c3 = st.columns(3)
+        r2_c1.metric("Khối lượng", f"{last['total_match_vol'] / 1e6:.2f}M")
+        r2_c2.metric("Khối ngoại mua", f"{last['foreign_buy_vol_total'] / 1e6:.2f}M")
+        r2_c3.metric("Khối ngoại bán", f"{last['foreign_sell_vol_total'] / 1e6:.2f}M")
+
+        # Hàng 3: % tăng giảm giá TB 1 tuần | % tăng giảm khối lượng TB 1 tuần | % tăng giảm khối ngoại
+        r3_c1, r3_c2, r3_c3 = st.columns(3)
+        r3_c1.metric("% tăng giảm giá TB 1 tuần",f"{price_avg_chg:+.2f}%")
+        r3_c2.metric("% tăng giảm khối lượng TB 1 tuần",f"{vol_avg_chg:+.2f}%")
+        r3_c3.metric("% tăng giảm khối ngoại TB 1 tuần",f"{fgn_avg_chg:+.2f}%")
+
+        # Hàng 4: MFI | CMF | Tỷ lệ thanh khoản (Mới bổ sung)
+        r4_c1, r4_c2, r4_c3 = st.columns(3)
+        r4_c1.metric("MFI", f"{mfi_val:.1f}" if mfi_val is not None else "—")
+        cmf_pct = cmf_val * 100
+        r4_c2.metric("CMF", f"{cmf_pct:.1f}%" if cmf_pct is not None else "—")
+        r4_c3.metric("Tỷ lệ thanh khoản",f"{liquidity_ratio:.2f}x" if pd.notna(liquidity_ratio) else "—",)

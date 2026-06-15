@@ -22,6 +22,7 @@ class DatabaseHandler:
             pool_pre_ping=True  # Ping trước khi dùng, tránh "connection closed" error
         )
 
+    # -----------DO NOT TOUCH THIS------------------------------
     def save_data(self, df: pd.DataFrame, table_name: str, conflict_columns: list):
         if df.empty:
             return
@@ -60,6 +61,56 @@ class DatabaseHandler:
         except Exception as e:
             logger.exception(f"❌ SQL error while saving to {table_name}: {e}")
             raise
+    # -----------DO NOT TOUCH THIS------------------------------
+
+    def save_data_for_securities(self, df: pd.DataFrame, table_name: str, conflict_columns: list):
+        if df.empty:
+            return
+
+        cols = df.columns.tolist()
+        col_names = ", ".join(cols)
+        placeholders = ", ".join([f":{c}" for c in cols])
+
+        update_cols = [c for c in cols if c not in conflict_columns and c != 'sector_name']
+        conflict_stmt = ", ".join(conflict_columns)
+
+        if update_cols:
+            update_stmt = ", ".join(
+                [f"{c} = EXCLUDED.{c}" for c in update_cols]
+            )
+            conflict_sql = f"DO UPDATE SET {update_stmt}"
+        else:
+            conflict_sql = "DO NOTHING"
+
+        query = text(f"""
+            INSERT INTO {table_name} ({col_names})
+            VALUES ({placeholders})
+            ON CONFLICT ({conflict_stmt})
+            {conflict_sql};
+        """)
+
+        batch_size = 1000
+        total_rows_affected = 0
+        try:
+            with self.engine.begin() as conn:
+                for i in range(0, len(df), batch_size):
+                    batch = df.iloc[i:i + batch_size]
+                    result= conn.execute(query,batch.to_dict(orient="records"))
+                    total_rows_affected += result.rowcount
+            logger.info(f"✅ Finished {table_name}: Processed {len(df)} rows. Affected (Upserted): {total_rows_affected} rows.")
+        except Exception as e:
+            logger.exception(f"❌ SQL error while saving to {table_name}: {e}")
+            raise
+
+    def deactivate_securities_by_market(self, market: str):
+        """Đặt trạng thái toàn bộ mã của một sàn về False trước khi nhận dữ liệu mới từ API"""
+        q = text("UPDATE securities SET is_active = FALSE WHERE market = :market")
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(q, {"market": market})
+            logger.info(f"🔄 Đã reset trạng thái tạm thời cho các mã sàn {market}")
+        except Exception as e:
+            logger.error(f"❌ Lỗi deactivate_securities_by_market {market}: {e}")
 
     def get_all_symbols(self, market=None):
         """Lấy danh sách symbol từ bảng securities"""
@@ -85,7 +136,7 @@ class DatabaseHandler:
         :param only_companies: Nếu True, chỉ lấy mã 3 ký tự (Cổ phiếu/ETF).
                                Nếu False, lấy tất cả (bao gồm Chứng quyền ~6-8 ký tự).
         """
-        query = "SELECT symbol FROM securities WHERE 1=1"
+        query = "SELECT symbol FROM securities WHERE is_active = TRUE"
         params = {}
         if only_companies:
             query += " AND symbol ~ '^[A-Z0-9]{3}$'"  # Lấy 3 ký tự (chữ hoặc số như ETF)
@@ -226,7 +277,7 @@ class DatabaseHandler:
         warmup = start - timedelta(days=270)
         q = text("""
             SELECT trading_date, open_price, highest_price, lowest_price,
-                   close_price, close_price_adjusted, total_match_vol,
+                   close_price, close_price_adjusted, total_match_vol,total_match_val,
                    foreign_buy_vol_total, foreign_sell_vol_total
             FROM daily_stock_prices
             WHERE symbol = :sym
@@ -428,6 +479,62 @@ class DatabaseHandler:
             return df
         except Exception as e:
             logger.error(f"❌ Lỗi fetch symbol history {sector}: {e}")
+            return pd.DataFrame()
+
+    def load_sector_ohlc(_db, sector: str, from_date: str, to_date: str) -> pd.DataFrame:
+        """
+        Liquidity-weighted synthetic OHLC for one sector.
+        weight_i = total_match_val_i (VND). All prices are adjusted.
+        sector_open  = Σ(adj_open_i  * w_i) / Σ w_i   (same for high/low/close)
+        sector_vol   = Σ vol_i
+        """
+        q = text("""
+            WITH members AS (
+                SELECT ssm.symbol
+                FROM stock_sector_mapping ssm
+                JOIN sector_master sm ON sm.sector_id = ssm.sector_id
+                WHERE sm.sector_name = :sector
+            ),
+            raw AS (
+                SELECT
+                    dsp.trading_date,
+                    dsp.open_price
+                        * dsp.close_price_adjusted / NULLIF(dsp.close_price, 0)  AS open_adj,
+                    dsp.highest_price
+                        * dsp.close_price_adjusted / NULLIF(dsp.close_price, 0)  AS high_adj,
+                    dsp.lowest_price
+                        * dsp.close_price_adjusted / NULLIF(dsp.close_price, 0)  AS low_adj,
+                    dsp.close_price_adjusted                                       AS close_adj,
+                    dsp.total_match_val                                            AS weight,
+                    dsp.total_match_vol                                            AS vol
+                FROM daily_stock_prices dsp
+                JOIN members m ON m.symbol = dsp.symbol
+                WHERE dsp.trading_date BETWEEN :from_date AND :to_date
+                  AND dsp.close_price > 0
+                  AND dsp.close_price_adjusted IS NOT NULL
+                  AND dsp.total_match_val > 0
+            )
+            SELECT
+                trading_date,
+                SUM(open_adj  * weight) / NULLIF(SUM(weight), 0)  AS open,
+                SUM(high_adj  * weight) / NULLIF(SUM(weight), 0)  AS high,
+                SUM(low_adj   * weight) / NULLIF(SUM(weight), 0)  AS low,
+                SUM(close_adj * weight) / NULLIF(SUM(weight), 0)  AS close,
+                SUM(vol)                                            AS volume,
+                COUNT(*)                                            AS n_stocks
+            FROM raw
+            GROUP BY trading_date
+            ORDER BY trading_date
+        """)
+        try:
+            with _db.engine.connect() as conn:
+                df = pd.read_sql(q, conn, params={
+                    "sector": sector, "from_date": from_date, "to_date": to_date,
+                })
+            df["trading_date"] = pd.to_datetime(df["trading_date"])
+            return df
+        except Exception as e:
+            logger.error(f"_load_sector_ohlc {sector}: {e}")
             return pd.DataFrame()
 
 if __name__ == "__main__":

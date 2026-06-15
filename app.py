@@ -82,7 +82,7 @@ has_data   = not symbols_df.empty
 st.title("📈 DataQuant & Signal")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Data",
+    "DataPipeline",
     "Chart",
     "Signals",
     "Sector",

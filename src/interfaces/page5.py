@@ -35,6 +35,7 @@ _PERIOD_DAYS: dict[str, int] = {
 
 _CHART_HEIGHT = 280   # px per candlestick panel
 
+_DEFAULT_MARKETS = ["HOSE", "HNX"]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -233,17 +234,12 @@ def _render_breadth(snapshot_df: pd.DataFrame) -> None:
         if col in disp.columns:
             styled = styled.apply(_breadth_style, subset=[col])
 
-    st.dataframe(styled, use_container_width=True, height=min(40 * len(disp) + 40, 400))
+    st.dataframe(styled, width='stretch', height=min(40 * len(disp) + 40, 400))
 
 
 # ── Candlestick matrix section ─────────────────────────────────────────────────
 
-def _render_chart_matrix(
-    all_ohlcv: dict[str, pd.DataFrame],
-    metadata_df: pd.DataFrame,
-    cols_per_row: int,
-    snapshot_df: pd.DataFrame,
-) -> None:
+def _render_chart_matrix(all_ohlcv: dict[str, pd.DataFrame], metadata_df: pd.DataFrame, cols_per_row: int, snapshot_df: pd.DataFrame) -> None:
     """
     Render all indices as a matrix of candlestick charts.
     Each cell = one index candlestick + volume panel.
@@ -268,7 +264,21 @@ def _render_chart_matrix(
                 float(r.get("ratio_change", 0) or 0),
             )
 
-    codes = sorted(all_ohlcv.keys())
+    priority_codes = ["VNINDEX", "HNXIndex", "VN30", "HNX30"]
+
+    # codes = sorted(all_ohlcv.keys())
+    # total = len(codes)
+
+    available_codes = list(all_ohlcv.keys())
+
+    # Lọc ra các mã ưu tiên (chỉ lấy nếu nó thực sự tồn tại trong dữ liệu tải về)
+    ordered_priority = [c for c in priority_codes if c in available_codes]
+
+    # Các mã còn lại xếp theo thứ tự chữ cái A-Z
+    other_codes = sorted([c for c in available_codes if c not in priority_codes])
+
+    # Gộp 2 danh sách lại
+    codes = ordered_priority + other_codes
     total = len(codes)
 
     st.markdown(f"#### 📈 Biểu đồ nến — {total} chỉ số")
@@ -332,40 +342,33 @@ def render(db) -> None:
     svc = IndexService(db)
 
     # ── Controls ───────────────────────────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+    c1, c2, c3  = st.columns([1, 1, 1])
 
     with c1:
-        market = st.selectbox(
-            "Sàn",
-            ["HOSE", "HNX", "UPCOM", "Tất cả"],
-            index=0,
-            key="idx_market",
-        )
-    with c2:
         period = st.selectbox(
             "Kỳ",
             list(_PERIOD_DAYS.keys()),
             index=2,
             key="idx_period",
         )
-    with c3:
+    with c2:
         cols_per_row = st.selectbox(
             "Số chart / hàng",
             [3, 4, 5],
             index=1,
             key="idx_cols",
         )
-    with c4:
+    with c3:
         show_breadth = st.checkbox("Hiện bảng breadth", value=True, key="idx_breadth")
 
     n_days  = _PERIOD_DAYS[period]
-    mkt_arg = None if market == "Tất cả" else market
+    # mkt_arg = None if market == "Tất cả" else market
 
     # ── Load data ──────────────────────────────────────────────────────────────
     with st.spinner("Đang tải dữ liệu chỉ số..."):
-        metadata_df  = svc.get_index_metadata(mkt_arg)
-        snapshot_df  = svc.get_latest_snapshot(mkt_arg)
-        all_ohlcv    = svc.get_all_indices_ohlcv(mkt_arg, n_days=n_days)
+        metadata_df  = svc.get_index_metadata(None)
+        snapshot_df  = svc.get_latest_snapshot(None)
+        all_ohlcv    = svc.get_all_indices_ohlcv(None, n_days=n_days)
 
     if not all_ohlcv:
         st.warning(

@@ -112,7 +112,7 @@ def render(signal_svc) -> None:
     if "Chiều" in disp.columns:
         styled = styled.map(_dir_color, subset=["Chiều"])
 
-    st.dataframe(styled, use_container_width=True, height=460)
+    st.dataframe(styled, width='stretch', height=460)
 
     # ── Detail JSON ───────────────────────────────────────────────────────────
     with st.expander("Chi tiết parameters (JSON)"):
