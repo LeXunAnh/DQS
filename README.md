@@ -34,7 +34,7 @@ Giao diện **Streamlit** giúp trực quan hóa biểu đồ kỹ thuật, lọ
 
 ### Phase 2 — Money Flow Analytics
 - [x] Theo dõi dòng tiền thị trường
-- [ ] Phân tích khối ngoại
+- [x] Phân tích khối ngoại
 - [x] Sector Rotation
 - [x] Market Breadth Indicators
 
