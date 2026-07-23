@@ -63,7 +63,7 @@ import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 

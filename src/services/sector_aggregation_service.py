@@ -57,7 +57,7 @@ Quality gate
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, date as date_type, timedelta
+from datetime import date as date_type
 from typing import Optional
 
 import numpy as np
@@ -65,7 +65,7 @@ import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 from src.services.base_sector_service import BaseSectorService
 
 

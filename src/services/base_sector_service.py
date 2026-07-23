@@ -64,7 +64,7 @@ from abc import ABC, abstractmethod
 from datetime import date as date_type, datetime, timedelta
 from typing import Optional
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 

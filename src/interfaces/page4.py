@@ -25,17 +25,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_lightweight_charts import renderLightweightCharts
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 from src.interfaces.helpers import (
-    PERIOD_DAYS,
-    REGIME_BG,
-    REGIME_COLOR,
-    MATRIX_THRESHOLDS,
     cell_style,
     delta_style,
     pct_change_style,
@@ -348,7 +343,7 @@ class _HeatmapSection:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Section: Score Trend Chart
+# Section: Score trend Chart
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _TrendChartSection:

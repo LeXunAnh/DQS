@@ -1,3 +1,3 @@
-from .handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 
 __all__ = ["DatabaseHandler"]
