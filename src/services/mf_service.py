@@ -33,13 +33,12 @@ Design Notes
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 from sqlalchemy import text
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 from src.indicators.mf_indicators import calc_mf_indicators
 from src.utils.price_utils import adjust_prices
 from src.services.base_symbol_service import BaseSymbolService

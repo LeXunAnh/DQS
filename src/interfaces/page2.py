@@ -29,6 +29,7 @@ from src.interfaces.helpers import (
     PERIOD_DAYS,
     build_ma_series,
     build_markers,
+    build_zigzag_series,
     compute_adj_prices,
     fetch_cmf_history,
     fetch_latest_mfi_cmf,
@@ -48,8 +49,8 @@ class _SymbolSelector:
 
     def render(self) -> dict:
         """
-        Render the control row and return a dict of user selections:
-            symbol, chart_type, period, sig_filter
+        Render the control rows and return a dict of user selections:
+            symbol, chart_type, period, sig_filter, zigzag_len
         """
         c1, c2, c3, c4 = st.columns([1.0, 1.2, 1.0, 1.8])
 
@@ -86,6 +87,7 @@ class _SymbolSelector:
             "chart_type": chart_type,
             "period":     period,
             "sig_filter": sig_filter,
+            "zigzag_len": 9,
         }
 
 
@@ -225,8 +227,12 @@ class _PriceChartSection:
         markers: list[dict],
         chart_type: str,
         chart_key: str,
+        zigzag_series: list[dict] | None = None,
     ) -> None:
-        render_price_chart(price_df, ma_series, markers, chart_type, chart_key)
+        render_price_chart(
+            price_df, ma_series, markers, chart_type, chart_key,
+            zigzag_series=zigzag_series,
+        )
         self._render_ma_labels(raw_adj)
 
     def _render_ma_labels(self, raw_adj: pd.DataFrame) -> None:
@@ -330,6 +336,7 @@ class Page2:
         chart_type = sel["chart_type"]
         period     = sel["period"]
         sig_filter = sel["sig_filter"]
+        zigzag_len = sel["zigzag_len"]
 
         # ── Date range ────────────────────────────────────────────────────────
         today      = datetime.now().date()
@@ -371,10 +378,15 @@ class Page2:
         sig_df    = self._loader.load_signals(symbol, start_date, today, sig_filter)
         markers   = build_markers(sig_df) if not sig_df.empty else []
 
+        # ZigZag — always on, computed on full raw_adj history so rolling
+        # windows are warm, then filtered to visible start_date inside
+        # build_zigzag_series.
+        zz_series = build_zigzag_series(raw_adj, length=zigzag_len, start_date=start_date)
+
         chart_key = (
             f"c_{symbol}_{start_date}_{chart_type}"
             f"_{''.join(_PriceChartSection._DEFAULT_MAS)}"
-            f"_{bool(sig_filter)}"
+            f"_{bool(sig_filter)}_{zigzag_len}"
         )
 
         # ── Layout: chart (left) | metric cards (right) ───────────────────────
@@ -382,7 +394,8 @@ class Page2:
 
         with col_left:
             self._chart_sec.render(
-                price_df, raw_adj, ma_series, markers, chart_type, chart_key
+                price_df, raw_adj, ma_series, markers, chart_type, chart_key,
+                zigzag_series=zz_series,
             )
 
         with col_right:

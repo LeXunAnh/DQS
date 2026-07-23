@@ -54,7 +54,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class IndexService:
         db  = DatabaseHandler()
         svc = IndexService(db)
 
-        meta = svc.get_index_metadata("HOSE")
+        meta = svc.get_index_metadata("HOSE")S
         df   = svc.get_ohlcv("VNINDEX", n_days=365)
         all_ = svc.get_all_indices_ohlcv("HOSE", n_days=180)
     """

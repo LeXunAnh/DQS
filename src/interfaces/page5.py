@@ -149,16 +149,16 @@ class _IndexDataLoader:
     here means the UI sections stay free of service dependencies.
     """
 
-    def __init__(self, db) -> None:
-        self._svc = IndexService(db)
+    def __init__(self, index_svc: IndexService) -> None:
+        self._svc = index_svc
 
     def load_all(self, n_days: int) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
         """
         Fetch metadata, snapshot, and OHLCV for all indices.
-
         Returns:
             (metadata_df, snapshot_df, all_ohlcv)
         """
+
         metadata_df = self._svc.get_index_metadata(None)
         snapshot_df = self._svc.get_latest_snapshot(None)
         all_ohlcv   = self._svc.get_all_indices_ohlcv(None, n_days=n_days)
@@ -263,55 +263,119 @@ class _SnapshotSection:
 # Section: Breadth Table
 # ══════════════════════════════════════════════════════════════════════════════
 
-class _BreadthSection:
-    """Advances / declines / ceilings / floors breadth statistics table."""
+# class _BreadthSection:
+#     """Advances / declines / ceilings / floors breadth statistics table."""
+#
+#     _COLUMN_MAP = {
+#         "index_code": "Chỉ số",
+#         "advances":   "🟢 Tăng",
+#         "no_changes": "⬜ Không đổi",
+#         "declines":   "🔴 Giảm",
+#         "ceilings":   "🔵 Trần",
+#         "floors":     "🟣 Sàn",
+#     }
+#
+#     def render(self, snapshot_df: pd.DataFrame) -> None:
+#         if snapshot_df.empty:
+#             return
+#
+#         avail = [c for c in self._COLUMN_MAP if c in snapshot_df.columns]
+#         if len(avail) < 3:
+#             return
+#
+#         with st.expander(
+#             "📋 Breadth thị trường (Tăng / Giảm / Trần / Sàn)", expanded=False
+#         ):
+#             disp    = snapshot_df[avail].copy().rename(columns=self._COLUMN_MAP)
+#             styled  = disp.style
+#             for col in ["🟢 Tăng", "🔵 Trần"]:
+#                 if col in disp.columns:
+#                     styled = styled.apply(self._breadth_style, subset=[col])
+#             for col in ["🔴 Giảm", "🟣 Sàn"]:
+#                 if col in disp.columns:
+#                     styled = styled.apply(self._breadth_style, subset=[col])
+#             st.dataframe(styled, width="stretch", height=min(40 * len(disp) + 40, 400))
+#
+#     @staticmethod
+#     def _breadth_style(col: pd.Series) -> list[str]:
+#         name = col.name
+#         styles = []
+#         for v in col:
+#             if not isinstance(v, (int, float)) or pd.isna(v):
+#                 styles.append("")
+#                 continue
+#             if "Tăng" in str(name) or "Trần" in str(name):
+#                 styles.append("color:#16a34a;font-weight:600")
+#             elif "Giảm" in str(name) or "Sàn" in str(name):
+#                 styles.append("color:#dc2626;font-weight:600")
+#             else:
+#                 styles.append("color:#6b7280")
+#         return styles
 
-    _COLUMN_MAP = {
-        "index_code": "Chỉ số",
-        "advances":   "🟢 Tăng",
-        "no_changes": "⬜ Không đổi",
-        "declines":   "🔴 Giảm",
-        "ceilings":   "🔵 Trần",
-        "floors":     "🟣 Sàn",
-    }
+
+class _BreadthSection:
+    """Độ rộng thị trường hiển thị dạng ma trận ngang cho 4 chỉ số chính."""
+
+    _TARGET_INDICES = ["VNINDEX", "VN30", "HNXINDEX", "HNX30"]
 
     def render(self, snapshot_df: pd.DataFrame) -> None:
         if snapshot_df.empty:
             return
 
-        avail = [c for c in self._COLUMN_MAP if c in snapshot_df.columns]
-        if len(avail) < 3:
+        # Đồng bộ hóa chữ hoa/thường để đối chiếu chính xác
+        df_match = snapshot_df.copy()
+        if "index_code" in df_match.columns:
+            df_match["match_code"] = df_match["index_code"].str.upper()
+        else:
             return
 
-        with st.expander(
-            "📋 Breadth thị trường (Tăng / Giảm / Trần / Sàn)", expanded=False
-        ):
-            disp    = snapshot_df[avail].copy().rename(columns=self._COLUMN_MAP)
-            styled  = disp.style
-            for col in ["🟢 Tăng", "🔵 Trần"]:
-                if col in disp.columns:
-                    styled = styled.apply(self._breadth_style, subset=[col])
-            for col in ["🔴 Giảm", "🟣 Sàn"]:
-                if col in disp.columns:
-                    styled = styled.apply(self._breadth_style, subset=[col])
-            st.dataframe(styled, width="stretch", height=min(40 * len(disp) + 40, 400))
+        # Lọc và sắp xếp chuẩn theo thứ tự yêu cầu
+        filtered_df = df_match[df_match["match_code"].isin(self._TARGET_INDICES)]
+        if filtered_df.empty:
+            return
 
-    @staticmethod
-    def _breadth_style(col: pd.Series) -> list[str]:
-        name = col.name
-        styles = []
-        for v in col:
-            if not isinstance(v, (int, float)) or pd.isna(v):
-                styles.append("")
+        filtered_df = filtered_df.set_index("match_code").reindex(self._TARGET_INDICES).reset_index()
+
+        st.markdown("#### 📋 Độ rộng thị trường")
+
+        # Tạo cấu trúc 4 cột tương ứng với 4 chỉ số chính
+        cols = st.columns(len(filtered_df))
+
+        for col, (_, row) in zip(cols, filtered_df.iterrows()):
+            # Trường hợp chỉ số thiếu dữ liệu trong snapshot
+            if pd.isna(row.get("index_code")):
+                code_name = row["match_code"]
+                with col:
+                    st.markdown(
+                        f"<div style='background:#f8f9fa;border-radius:8px;padding:12px;border:1px solid #e9ecef;text-align:center'>"
+                        f"<div style='font-weight:700;font-size:14px;color:#333;margin-bottom:6px'>{code_name}</div>"
+                        f"<div style='font-size:12px;color:#9ca3af;font-style:italic'>Không có dữ liệu</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
                 continue
-            if "Tăng" in str(name) or "Trần" in str(name):
-                styles.append("color:#16a34a;font-weight:600")
-            elif "Giảm" in str(name) or "Sàn" in str(name):
-                styles.append("color:#dc2626;font-weight:600")
-            else:
-                styles.append("color:#6b7280")
-        return styles
 
+            code = str(row["index_code"]).upper()
+            floor = int(row.get("floors", 0) or 0)
+            dec = int(row.get("declines", 0) or 0)
+            flat = int(row.get("no_changes", 0) or 0)
+            adv = int(row.get("advances", 0) or 0)
+            ceil = int(row.get("ceilings", 0) or 0)
+
+            with col:
+                st.markdown(
+                    f"<div style='background:#f8f9fa;border-radius:8px;padding:10px 12px;border:1px solid #e9ecef;text-align:center'>"
+                    f"  <div style='font-weight:700;font-size:14px;color:#111;margin-bottom:8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px'>{code}</div>"
+                    f"  <div style='display:flex;justify-content:space-between;align-items:center;gap:2px;font-size:12px;font-weight:600'>"
+                    f"    <div style='color:#06b6d4' title='Sàn'><span style='display:block;font-size:10px;color:#6b7280;font-weight:normal'>SÀN</span>{floor}</div>"
+                    f"    <div style='color:#dc2626' title='Giảm'><span style='display:block;font-size:10px;color:#6b7280;font-weight:normal'>GIẢM</span>{dec}</div>"
+                    f"    <div style='color:#4b5563' title='Không đổi'><span style='display:block;font-size:10px;color:#6b7280;font-weight:normal'>TC</span>{flat}</div>"
+                    f"    <div style='color:#16a34a' title='Tăng'><span style='display:block;font-size:10px;color:#6b7280;font-weight:normal'>TĂNG</span>{adv}</div>"
+                    f"    <div style='color:#a855f7' title='Trần'><span style='display:block;font-size:10px;color:#6b7280;font-weight:normal'>TRẦN</span>{ceil}</div>"
+                    f"  </div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Section: Candlestick Matrix
@@ -446,8 +510,8 @@ class Page5:
         page.render()
     """
 
-    def __init__(self, db) -> None:
-        self._loader  = _IndexDataLoader(db)
+    def __init__(self, db, index_svc) -> None:
+        self._loader  = _IndexDataLoader(index_svc)
 
         self._controls  = _ControlBar()
         self._snapshot  = _SnapshotSection()
@@ -504,6 +568,6 @@ class Page5:
 
 # ── Backward-compatible module-level entry point ──────────────────────────────
 
-def render(db) -> None:
+def render(db, index_svc) -> None:
     """Backward-compatible shim — delegates to Page5."""
-    Page5(db).render()
+    Page5(db, index_svc).render()

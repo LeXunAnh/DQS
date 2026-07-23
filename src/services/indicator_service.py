@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy import text
 
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,14 @@ class IndicatorService(BaseSymbolService):
     # Cột DB output tương ứng với cột pandas
     _OUTPUT_COLS = [
         "symbol", "trading_date",
-        # Trend
+        # trend
         "ma5", "ma10", "ma20", "ma50", "ma200",
         "ema9", "ema12", "ema26",
-        # Momentum
+        # momentum
         "rsi14",
         "macd", "macd_signal", "macd_hist",
         "stoch_k", "stoch_d",
-        # Volatility
+        # volatility
         "bb_upper", "bb_middle", "bb_lower", "bb_width", "atr14",
         # Volume
         "vol_ma20", "vol_ratio", "obv",

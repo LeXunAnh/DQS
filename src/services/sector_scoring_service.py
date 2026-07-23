@@ -75,7 +75,7 @@ import pandas as pd
 from sqlalchemy import text
 from tqdm import tqdm
 
-from src.database.handler import DatabaseHandler
+from src.datapipe.handler import DatabaseHandler
 from src.services.base_sector_service import BaseSectorService
 
 logger = logging.getLogger(__name__)

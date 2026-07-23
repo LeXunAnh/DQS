@@ -3,13 +3,13 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable
 
 from tqdm import tqdm
 
-from src.core.api_client import SSIAPIClient
-from src.core.transformer import DataTransformer
-from src.database.handler import DatabaseHandler
+from src.datapipe.api_client import SSIAPIClient
+from src.datapipe.transformer import DataTransformer
+from src.datapipe.handler import DatabaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -221,33 +221,6 @@ class SyncService:
                 time.sleep(1)
         return False
 
-    # def fetch_daily_ohlc(self, symbol: str, from_date: str, to_date: str,max_retries: int = 3) -> bool:
-    #     """Lấy OHLC cho một symbol và lưu vào DB"""
-    #     for attempt in range(max_retries):
-    #         try:
-    #             res = self.api.get_daily_ohlc(symbol, from_date, to_date)
-    #             status = res.get('status')
-    #             if status == 'Success':
-    #                 data = res.get('data', [])
-    #                 df = self.transformer.daily_ohlc_to_df(symbol, data)
-    #                 if not df.empty:
-    #                     self.db.save_data(df, 'daily_ohlc', ['symbol', 'trading_date'])
-    #                 return True
-    #             elif status == 401 or res.get('statusCode') == 401:
-    #                 logger.error("Token hết hạn, đang refresh...")
-    #                 self.api.get_access_token()
-    #             elif status == 429 or res.get('statusCode') == 429:
-    #                 wait = (attempt + 1) * 2
-    #                 logger.warning(f"Rate limit OHLC cho {symbol}, đợi {wait}s")
-    #                 time.sleep(wait)
-    #             else:
-    #                 logger.error(f"Lỗi OHLC cho {symbol}: {res}")
-    #                 return False
-    #         except Exception as e:
-    #             logger.exception(f"Exception trong fetch_daily_ohlc: {e}")
-    #             time.sleep(1)
-    #     return False
-
     def sync_all_ohlc(self, market: str = "HOSE", from_date: str = "01/01/2015", to_date: str = "13/02/2026"):
         """Đồng bộ OHLC cho toàn bộ sàn"""
         symbols = self.db.get_all_symbols(market=market)
@@ -260,51 +233,6 @@ class SyncService:
                 logger.error(f"Lỗi tại mã {symbol}: {e}")
             finally:
                 time.sleep(1.2)
-
-    # def sync_all_ohlc(self, market: str = 'HOSE',from_date: str = '01/01/2015',to_date: str = '13/02/2026'):
-    #     """Đồng bộ OHLC cho toàn bộ sàn"""
-    #     symbols = self.db.get_all_symbols(market=market)
-    #     pbar = tqdm(symbols, desc=f"🚀 Syncing {market}", unit="symbol")
-    #     for symbol in pbar:
-    #         try:
-    #             pbar.set_postfix({"Current": symbol})
-    #             self.fetch_daily_ohlc(symbol, from_date, to_date)
-    #         except Exception as e:
-    #             logger.error(f"Lỗi tại mã {symbol}: {e}")
-    #         finally:
-    #             time.sleep(1.2)
-
-    # def fetch_daily_stock_prices(self, symbol: str, from_date: str, to_date: str,chunk_days: int = 30, max_retries: int = 3) -> bool:
-    #     """Lấy dữ liệu giá chi tiết theo từng chunk để tránh rate limit"""
-    #     start_dt = datetime.strptime(from_date, '%d/%m/%Y')
-    #     end_dt = datetime.strptime(to_date, '%d/%m/%Y')
-    #     current_start = start_dt
-    #     delta = timedelta(days=chunk_days - 1)  # để inclusive
-    #
-    #     with tqdm(desc=f"  ↳ {symbol}", unit="chunk", leave=False) as pbar_chunks:
-    #         while current_start <= end_dt:
-    #             current_end = min(current_start + delta, end_dt)
-    #             str_start = current_start.strftime('%d/%m/%Y')
-    #             str_end = current_end.strftime('%d/%m/%Y')
-    #             pbar_chunks.set_postfix({"range": f"{str_start}-{str_end}"})
-    #
-    #             success = False
-    #             for attempt in range(max_retries):
-    #                 if self._execute_fetch_stock_prices(symbol, str_start, str_end):
-    #                     success = True
-    #                     break
-    #                 else:
-    #                     logger.warning(f"⚠️ Thử lại lần {attempt+1} cho {symbol} [{str_start}]")
-    #                     time.sleep(1)
-    #             pbar_chunks.update(1)
-    #             time.sleep(1)
-    #
-    #             if success:
-    #                 current_start = current_end + timedelta(days=1)
-    #             else:
-    #                 logger.error(f"Fail at {symbol} {str_start}")
-    #                 current_start = current_end + timedelta(days=1)
-    #     return True
 
     def _execute_fetch_stock_prices(self, symbol: str, from_date: str, to_date: str) -> bool:
         """Single-chunk request for stock price data."""
@@ -336,29 +264,6 @@ class SyncService:
             max_retries=max_retries,
             inter_chunk_sleep=1.0,
         )
-
-    # def _execute_fetch_stock_prices(self, symbol: str, from_date: str, to_date: str) -> bool:
-    #     """Thực hiện một request lấy dữ liệu giá và lưu vào DB"""
-    #     try:
-    #         res = self.api.get_daily_stock_price(symbol, from_date, to_date)
-    #         status = res.get('status')
-    #         if status == 'Success':
-    #             data = res.get('data', [])
-    #             if not data:
-    #                 # Không có dữ liệu (ngày nghỉ) vẫn coi là thành công
-    #                 return True
-    #             df = self.transformer.daily_stock_price_to_df(symbol, data)
-    #             self.db.save_data(df, 'daily_stock_prices', ['symbol', 'trading_date'])
-    #             return True
-    #         elif status in (401, 429) or res.get('statusCode') in (401, 429):
-    #             logger.warning(f"Rate limit hoặc auth lỗi: {status}")
-    #             return False
-    #         else:
-    #             logger.error(f"API Error: {res.get('message')}")
-    #             return False
-    #     except Exception as e:
-    #         logger.error(f"Exception: {e}")
-    #         return False
 
     def sync_all_stock_prices(self, market: str = 'HOSE', from_date: str = '01/01/2021'):
         """Đồng bộ dữ liệu giá chi tiết cho tất cả mã trên sàn"""
@@ -452,44 +357,6 @@ class SyncService:
                 time.sleep(1)
         return False
 
-    # def fetch_index_list(self, market: str = 'HOSE', max_retries: int = 3) -> bool:
-    #     """Đồng bộ danh sách chỉ số (Index List) của một sàn"""
-    #     for attempt in range(max_retries):
-    #         try:
-    #             res = self.api.get_index_list(market, 1, 100)
-    #             status = res.get('status')
-    #
-    #             if status == 'Success':
-    #                 data = res.get('data', [])
-    #                 if not data:
-    #                     logger.warning(f"Không có dữ liệu index list cho sàn {market}")
-    #                     return False
-    #
-    #                 # Lọc sạch phần tử lỗi trước khi đưa vào transformer giống logic cũ
-    #                 clean_data = [item for item in data if item.get('IndexCode')]
-    #                 df = self.transformer.index_list_to_df(clean_data)
-    #
-    #                 if not df.empty:
-    #                     self.db.save_data(df, 'index_list', ['index_code'])
-    #                     logger.info(f"✅ Đã đồng bộ {len(df)} index cho sàn {market}")
-    #                     return True
-    #                 return False
-    #
-    #             elif status == 401 or res.get('statusCode') == 401:
-    #                 logger.error("Token hết hạn khi lấy index list, đang refresh...")
-    #                 self.api.get_access_token()
-    #             elif status == 429 or res.get('statusCode') == 429:
-    #                 wait = (attempt + 1) * 2
-    #                 logger.warning(f"Rate limit index list cho sàn {market}, đợi {wait}s")
-    #                 time.sleep(wait)
-    #             else:
-    #                 logger.error(f"Lỗi lấy index list sàn {market}: {res}")
-    #                 return False
-    #         except Exception as e:
-    #             logger.exception(f"Lỗi trong fetch_index_list ({market}): {e}")
-    #             time.sleep(1)
-    #     return False
-
     def sync_index_lists(self) -> bool:
         """Đồng bộ danh sách chỉ số cho tất cả các sàn"""
         markets = ['HOSE', 'HNX', 'UPCOM']
@@ -537,79 +404,6 @@ class SyncService:
             max_retries=max_retries,
             inter_chunk_sleep=0.5,
         )
-
-    # def fetch_daily_index(self, index_code: str, from_date: str, to_date: str, chunk_days: int = 30,max_retries: int = 3) -> bool:
-    #     """
-    #     Lấy dữ liệu lịch sử của một chỉ số theo từng đoạn nhỏ (chunk) để tránh giới hạn 30 ngày của API.
-    #     """
-    #     start_dt = datetime.strptime(from_date, '%d/%m/%Y')
-    #     end_dt = datetime.strptime(to_date, '%d/%m/%Y')
-    #     current_start = start_dt
-    #     delta = timedelta(days=chunk_days - 1)  # Đảm bảo tính cả ngày bắt đầu (inclusive)
-    #
-    #     # Sử dụng tqdm con dạng ngắn để theo dõi tiến độ từng mã chỉ số (nếu cần hiển thị lồng)
-    #     with tqdm(desc=f"  ↳ {index_code}", unit="chunk", leave=False) as pbar_chunks:
-    #         while current_start <= end_dt:
-    #             current_end = min(current_start + delta, end_dt)
-    #             str_start = current_start.strftime('%d/%m/%Y')
-    #             str_end = current_end.strftime('%d/%m/%Y')
-    #             pbar_chunks.set_postfix({"range": f"{str_start}-{str_end}"})
-    #
-    #             success = False
-    #             for attempt in range(max_retries):
-    #                 if self._execute_fetch_daily_index(index_code, str_start, str_end):
-    #                     success = True
-    #                     break
-    #                 else:
-    #                     logger.warning(f"⚠️ Thử lại lần {attempt + 1} lấy daily index mã {index_code} [{str_start}]")
-    #                     time.sleep(1)
-    #
-    #             pbar_chunks.update(1)
-    #
-    #             # Sleep 0.5s giữa các chu kỳ chunk để giảm tải cho API
-    #             time.sleep(0.5)
-    #
-    #             if success:
-    #                 current_start = current_end + timedelta(days=1)
-    #             else:
-    #                 logger.error(f"❌ Thất bại hoàn toàn tại mã chỉ số {index_code} khoảng [{str_start} - {str_end}]")
-    #                 # Tiếp tục nhảy sang chunk tiếp theo để tránh bị treo tiến trình
-    #                 current_start = current_end + timedelta(days=1)
-    #
-    #     return True
-
-    # def _execute_fetch_daily_index(self, index_code: str, from_date: str, to_date: str) -> bool:
-    #     """
-    #     Thực hiện một request thực tế để lấy dữ liệu daily index trong phạm vi an toàn (<=30 ngày)
-    #     """
-    #     try:
-    #         res = self.api.get_daily_index(index_code, from_date, to_date)
-    #         status = res.get('status')
-    #
-    #         if status == 'Success':
-    #             data = res.get('data', [])
-    #             if not data:
-    #                 # Không có dữ liệu (ngày nghỉ/cuối tuần) vẫn coi là thành công để chạy tiếp
-    #                 return True
-    #
-    #             df = self.transformer.daily_index_to_df(index_code, data)
-    #             if not df.empty:
-    #                 self.db.save_data(df, 'daily_index', ['index_code', 'trading_date'])
-    #             return True
-    #
-    #         elif status == 401 or res.get('statusCode') == 401:
-    #             logger.error("Token hết hạn khi lấy daily index, đang refresh...")
-    #             self.api.get_access_token()
-    #             return False
-    #         elif status == 429 or res.get('statusCode') == 429:
-    #             logger.warning(f"Rate limit daily index cho mã {index_code}")
-    #             return False
-    #         else:
-    #             logger.error(f"API Error khi lấy daily index {index_code}: {res.get('message')}")
-    #             return False
-    #     except Exception as e:
-    #         logger.error(f"Exception trong _execute_fetch_daily_index ({index_code}): {e}")
-    #         return False
 
     def sync_all_daily_index(self, market: str = 'HOSE', from_date: str = '01/01/2021', maintenance_mode: bool = False):
         """
@@ -660,5 +454,7 @@ class SyncService:
                 logger.error(f"❌ Lỗi khi đồng bộ dữ liệu daily_index cho mã {index_code}: {e}")
             finally:
                 time.sleep(0.5)
+
+
 
 

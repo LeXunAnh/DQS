@@ -38,6 +38,8 @@ Giao diện **Streamlit** giúp trực quan hóa biểu đồ kỹ thuật, lọ
 - [x] Sector Rotation
 - [x] Market Breadth Indicators
 
+##STOP PROJECT 
+
 ### Phase 3 — Backtesting Framework
 - [ ] Backtest chiến lược giao dịch
 - [ ] Portfolio Simulation

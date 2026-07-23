@@ -166,10 +166,14 @@ def score_color_style(val: float) -> str:
     """Background+foreground CSS for total_score cells in sector tables."""
     if pd.isna(val):
         return "background-color:#f3f4f6"
-    if val >= 0.45:  return "background-color:#16a34a;color:#fff"
-    if val >= 0.15:  return "background-color:#86efac;color:#14532d"
-    if val >= -0.15: return "background-color:#f3f4f6;color:#374151"
+
+    if val >= 0.45:  return "background-color:#16a34a;color:#ffffff"
+    if val >= 0.30:  return "background-color:#4ade80;color:#14532d"
+    if val >= 0.10:  return "background-color:#bbf7d0;color:#166534"
+    if val >= -0.10:  return "background-color:#f3f4f6;color:#374151"
+    if val >= -0.30: return "background-color:#fee2e2;color:#991b1b"
     if val >= -0.45: return "background-color:#fca5a5;color:#7f1d1d"
+
     return "background-color:#dc2626;color:#fff"
 
 
@@ -312,12 +316,186 @@ def build_markers(sig_df: pd.DataFrame) -> list[dict]:
     return sorted(markers, key=lambda m: m["time"])
 
 
+def calc_zigzag(
+    df: pd.DataFrame,
+    length: int = 9,
+    high_col: str = "adj_high",
+    low_col:  str = "adj_low",
+    time_col: str = "trading_date",
+) -> list[dict]:
+    """
+    Compute ZigZag pivot points from a price DataFrame.
+
+    Translates the Pine Script ZigZag logic (highest/lowest over `length` bars,
+    trend-flip detection) into a Python/pandas implementation.
+
+    Algorithm
+    ─────────
+    At each bar:
+    • to_up   = high >= rolling_max(high, length)   → potential upswing
+    • to_down = low  <= rolling_min(low,  length)   → potential downswing
+
+    trend starts at +1 (uptrend).
+    • If trend == +1 and to_down fires → flip to -1, record the HIGH pivot
+      as the highest high since the last downswing.
+    • If trend == -1 and to_up fires  → flip to +1, record the LOW pivot
+      as the lowest low since the last upswing.
+
+    On each flip, the pivot price and date are recorded.
+    The returned list connects consecutive pivots as line-series data points,
+    which TradingView lightweight-charts renders as the ZigZag line.
+
+    Parameters
+    ──────────
+    df       : DataFrame with at least high_col, low_col, time_col columns.
+    length   : lookback period for highest/lowest detection (default 9).
+    high_col : column name for bar highs  (default "adj_high").
+    low_col  : column name for bar lows   (default "adj_low").
+    time_col : column name for bar date   (default "trading_date").
+
+    Returns
+    ───────
+    list[dict]  — TradingView Line-series data: [{"time": "YYYY-MM-DD", "value": float}, …]
+    Each dict is one confirmed ZigZag pivot; the chart library draws straight
+    lines between consecutive points.
+    """
+    if df.empty or len(df) < length + 1:
+        return []
+
+    highs  = df[high_col].values.astype(float)
+    lows   = df[low_col].values.astype(float)
+    dates  = df[time_col].values   # numpy datetime64 or date objects
+    n      = len(df)
+
+    # Rolling highest / lowest (pandas does this cleanly)
+    roll_high = df[high_col].rolling(length, min_periods=length).max().values
+    roll_low  = df[low_col].rolling(length, min_periods=length).min().values
+
+    # ── State ──────────────────────────────────────────────────────────────────
+    trend         = 1    # +1 = uptrend (looking for next low); -1 = downtrend
+    pivots: list[tuple] = []   # (date_str, price)
+    last_flip_bar = 0    # bar index of the last confirmed trend flip
+
+    for i in range(length - 1, n):
+        to_up   = (roll_high[i] is not None and not np.isnan(roll_high[i])
+                   and highs[i] >= roll_high[i])
+        to_down = (roll_low[i] is not None and not np.isnan(roll_low[i])
+                   and lows[i]  <= roll_low[i])
+
+        if trend == 1 and to_down:
+            # Flip to downtrend: record the HIGH pivot in [last_flip_bar .. i]
+            seg_highs = highs[last_flip_bar:i + 1]
+            hi_idx    = last_flip_bar + int(np.argmax(seg_highs))
+            d         = dates[hi_idx]
+            date_str  = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+            pivots.append((date_str, float(highs[hi_idx])))
+            trend         = -1
+            last_flip_bar = i
+
+        elif trend == -1 and to_up:
+            # Flip to uptrend: record the LOW pivot in [last_flip_bar .. i]
+            seg_lows = lows[last_flip_bar:i + 1]
+            lo_idx   = last_flip_bar + int(np.argmin(seg_lows))
+            d        = dates[lo_idx]
+            date_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+            pivots.append((date_str, float(lows[lo_idx])))
+            trend         = 1
+            last_flip_bar = i
+
+    # ── Append the "live" (unconfirmed) last pivot so the ZigZag reaches
+    #    the current bar rather than stopping at the previous confirmed flip.
+    if pivots:
+        if trend == 1:
+            # Still in uptrend → the live pivot is the highest high so far
+            seg   = highs[last_flip_bar:]
+            hi_off = int(np.argmax(seg))
+            hi_idx = last_flip_bar + hi_off
+            d = dates[hi_idx]
+            date_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+            live_val = float(highs[hi_idx])
+        else:
+            # Still in downtrend → the live pivot is the lowest low so far
+            seg   = lows[last_flip_bar:]
+            lo_off = int(np.argmin(seg))
+            lo_idx = last_flip_bar + lo_off
+            d = dates[lo_idx]
+            date_str = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+            live_val = float(lows[lo_idx])
+
+        # Only append live pivot if it differs from last confirmed pivot
+        if not pivots or pivots[-1][0] != date_str:
+            pivots.append((date_str, live_val))
+
+    # ── Convert to TradingView Line-series format ──────────────────────────────
+    return [{"time": t, "value": round(v, 2)} for t, v in pivots]
+
+
+def build_zigzag_series(
+    price_df: pd.DataFrame,
+    length: int = 9,
+    start_date=None,
+) -> list[dict]:
+    """
+    Build a TradingView Line-series dict for the ZigZag overlay.
+
+    Parameters
+    ──────────
+    price_df   : adjusted price DataFrame with adj_high, adj_low, trading_date.
+    length     : ZigZag pivot detection length.
+    start_date : only include pivots on/after this date (date or None).
+
+    Returns
+    ───────
+    A single-element list containing the series config dict, ready to be
+    appended to the chart's `series` list.  Returns [] if no pivots found.
+    """
+    pivots = calc_zigzag(price_df, length=length)
+    if not pivots:
+        return []
+
+    # Filter to visible range only after computing on full data
+    if start_date is not None:
+        start_str = (
+            start_date.strftime("%Y-%m-%d")
+            if hasattr(start_date, "strftime")
+            else str(start_date)[:10]
+        )
+        # Keep the last pivot before start_date as an anchor so the first
+        # visible segment is drawn from the correct starting price.
+        visible = [p for p in pivots if p["time"] >= start_str]
+        # Find the last pivot strictly before start so the line doesn't float
+        before  = [p for p in pivots if p["time"] < start_str]
+        if before and visible:
+            pivots = [before[-1]] + visible
+        elif visible:
+            pivots = visible
+        else:
+            return []
+
+    return [
+        {
+            "type": "Line",
+            "data": pivots,
+            "options": {
+                "color":            "#38bdf8",   #  stands out on candlestick chart
+                "lineWidth":        2,
+                "lineStyle":        0,            # solid
+                "priceLineVisible": False,
+                "lastValueVisible": False,
+                "crosshairMarkerVisible": True,
+                "priceFormat": {"type": "price", "precision": 2, "minMove": 0.01},
+            },
+        }
+    ]
+
+
 def render_price_chart(
     price_df: pd.DataFrame,
     ma_series: list[dict],
     markers: list[dict],
     chart_type: str,
     key: str,
+    zigzag_series: list[dict] | None = None,
 ) -> None:
     """Render TradingView lightweight price panel + volume panel."""
     bg   = {"type": "solid", "color": "#ffffff"}
@@ -389,7 +567,7 @@ def render_price_chart(
                 "timeScale": {"borderColor": "#d1d5db", "rightOffset": 8},
                 "rightPriceScale": {"borderColor": "#d1d5db"},
             },
-            "series": [main_series] + ma_series,
+            "series": [main_series] + ma_series + (zigzag_series or []),
         },
         {
             "chart": {
