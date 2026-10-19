@@ -38,21 +38,21 @@ Giao diện **Streamlit** giúp trực quan hóa biểu đồ kỹ thuật, lọ
 - [x] Sector Rotation
 - [x] Market Breadth Indicators
 
-##STOP PROJECT BECAUSE BROKER UPDATE API
+###STOP PROJECT BECAUSE BROKER UPDATE API
 
-### Phase 3 — Backtesting Framework
+## Phase 3 — Backtesting Framework
 - [ ] Backtest chiến lược giao dịch
 - [ ] Portfolio Simulation
 - [ ] Performance Analytics
 - [ ] Risk Metrics
 
-### Phase 4 — Alpha Research
+## Phase 4 — Alpha Research
 - [ ] Alpha Factor Library
 - [ ] Cross-sectional Ranking
 - [ ] Multi-factor Models
 - [ ] Quant Research Workspace
 
-### Upcoming
+## Upcoming
 - [ ] Add mutiple source data (vnstock,tcbs,...)
 - [ ] Real-time Streaming Data
 - [ ] Alert System
